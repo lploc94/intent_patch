@@ -96,7 +96,7 @@ bash install.sh
 
 ```
 intent_patch/
-  .claude/agents/       # Custom agents cho Claude Code
+  custom_agents/        # Custom agents cho Intent workspace
     critique.md
     debug.md
     implement-reviewer.md
