@@ -2,8 +2,9 @@
 set -e
 
 APP="/Applications/Intent by Augment.app"
-EXTRACTED="/Users/lploc94/projects/intent/extracted"
-ASAR="/Users/lploc94/projects/intent/app.asar"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+EXTRACTED="$SCRIPT_DIR/extracted"
+ASAR="$SCRIPT_DIR/app.asar"
 UNPACKED="$APP/Contents/Resources/app.asar.unpacked"
 
 echo "Killing Intent by Augment..."

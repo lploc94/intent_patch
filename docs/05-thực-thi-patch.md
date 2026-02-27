@@ -5,7 +5,7 @@ Hướng dẫn áp dụng từng patch. Chạy theo thứ tự hoặc dùng `app
 ## Chuẩn bị
 
 ```bash
-cd ~/projects/intent
+cd ~/projects/intent_patch
 # Đảm bảo đã extract
 ls extracted/dist/features/agent/services/agent-factory.js || echo "Cần extract trước!"
 ```

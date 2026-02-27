@@ -21,34 +21,52 @@ Patch 3 files trong app.asar:
 ### Yêu cầu
 
 - macOS (Apple Silicon hoặc Intel)
-- Intent by Augment v0.2.11 đã cài tại `/Applications/Intent by Augment.app`
+- Intent by Augment đã cài tại `/Applications/Intent by Augment.app`
 - Node.js >= 18 (cần cho `npx asar`)
-- Python 3 (cho verify script)
+- Python 3 (cho autopatch và verify script)
 - Quyền sudo
 
-### Cách 1: Một lệnh (recommended)
+### Cách 1: Auto-patch (recommended, version-independent)
 
 ```bash
-git clone <repo-url> ~/projects/intent
-cd ~/projects/intent
+git clone <repo-url> ~/projects/intent_patch
+cd ~/projects/intent_patch
 
-# Extract app gốc, apply patches, repack, install (cần sudo)
+# Extract app gốc
 cp "/Applications/Intent by Augment.app/Contents/Resources/app.asar" app.asar.backup
 npx asar extract app.asar.backup extracted
+
+# Auto-patch: discover files, apply patches, verify, repack, install (cần sudo)
 bash apply.sh
 ```
 
-### Cách 2: Từng bước
+`apply.sh` mặc định chạy `autopatch.py` — tự động discover đúng chunk files, apply patches, verify, repack và install. Hoạt động với nhiều version Intent, không bị ràng buộc tên file cố định.
+
+### Cách 2: Legacy mode (chỉ Intent v0.2.11)
 
 ```bash
-git clone <repo-url> ~/projects/intent
-cd ~/projects/intent
+git clone <repo-url> ~/projects/intent_patch
+cd ~/projects/intent_patch
+
+# Extract app gốc
+cp "/Applications/Intent by Augment.app/Contents/Resources/app.asar" app.asar.backup
+npx asar extract app.asar.backup extracted
+
+# Legacy: copy pre-built patches (v0.2.11 only)
+bash apply.sh --legacy
+```
+
+### Cách 3: Từng bước thủ công
+
+```bash
+git clone <repo-url> ~/projects/intent_patch
+cd ~/projects/intent_patch
 
 # 1. Backup và extract app gốc
 cp "/Applications/Intent by Augment.app/Contents/Resources/app.asar" app.asar.backup
 npx asar extract app.asar.backup extracted
 
-# 2. Copy patched files vào extracted/
+# 2. Copy patched files vào extracted/ (chỉ v0.2.11)
 cp patches/dist/features/agent/services/agent-factory.js \
    extracted/dist/features/agent/services/agent-factory.js
 cp patches/dist/renderer/app/immutable/chunks/BTPDcoPQ.js \
@@ -77,15 +95,24 @@ bash install.sh
 ## Cấu trúc project
 
 ```
-intent/
-  patches/              # 3 file đã patch (git-tracked, ~184KB)
+intent_patch/
+  .claude/agents/       # Custom agents cho Claude Code
+    critique.md
+    debug.md
+    implement-reviewer.md
+    investigate.md
+    spec-reviewer.md
+  patches/              # 3 file đã patch cho v0.2.11 (git-tracked, ~184KB)
     dist/
       features/agent/services/agent-factory.js
       renderer/app/immutable/chunks/BTPDcoPQ.js
       renderer/app/immutable/chunks/CfKn743W.js
-  apply.sh              # Script tự động: copy patches → verify → repack → install
+  docs/                 # Tài liệu kỹ thuật chi tiết
+  autopatch.py          # Auto-patcher: discover files, apply patches (version-independent)
+  apply.sh              # Entry point: forward sang autopatch.py hoặc --legacy mode
   install.sh            # Script cài đặt: copy asar + unpacked files vào app
-  verify.py             # Kiểm tra 11 assertions trên 3 file
+  verify.py             # Kiểm tra 11 assertions trên 3 file (v0.2.11)
+  CLAUDE.md             # Claude Code project context
   README.md             # File này
   PATCHES.md            # Chi tiết từng patch, symbol map, logic
   .gitignore            # Exclude extracted/, *.asar, node_modules/
@@ -123,6 +150,16 @@ Xem thêm [PATCHES.md](PATCHES.md) để tra cứu nhanh từng patch và symbol
 5. Xác nhận trên Intent
 6. Copy file đã sửa vào `patches/`: `cp extracted/<path> patches/<path>`
 7. Commit
+
+### Auto-patch workflow (cho version mới)
+
+Khi Intent update, tên chunk files thay đổi. Dùng `autopatch.py`:
+
+```bash
+bash apply.sh --discover-only   # Chỉ discover files + resolve symbols
+bash apply.sh                    # Full: discover → patch → verify → install
+bash apply.sh --no-install       # Patch nhưng không install
+```
 
 ### Lưu ý quan trọng
 

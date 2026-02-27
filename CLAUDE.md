@@ -5,13 +5,22 @@ Multi-provider patch cho Intent by Augment **v0.2.11**. Cho phép chọn model t
 ## Commands
 
 ```bash
+# Auto-patch (version-independent): discover → patch → verify → repack → install
+bash apply.sh
+
+# Auto-patch without installing
+bash apply.sh --no-install
+
+# Discover files + resolve symbols only
+bash apply.sh --discover-only
+
+# Legacy mode (v0.2.11 pre-built patches only)
+bash apply.sh --legacy
+
 # Extract app gốc
 npx asar extract app.asar.backup extracted
 
-# Apply patches (copy patched files → verify → repack → install)
-bash apply.sh
-
-# Verify patches (11 assertions across 3 files)
+# Verify patches (11 assertions across 3 files, v0.2.11)
 python3 verify.py
 
 # Repack thủ công
@@ -50,6 +59,13 @@ Safety-net: khi cross-provider mismatch, **align provider theo model** thay vì 
 4. Test       npx asar pack extracted app.asar && bash install.sh
 5. Archive    cp extracted/.../file patches/.../file  (3 files)
 6. Commit     git add patches/ && git commit
+```
+
+Auto-patch (version-independent):
+```
+1. Extract    npx asar extract app.asar.backup extracted
+2. Patch      bash apply.sh              # hoặc --no-install
+3. Verify     Tự động bởi autopatch.py
 ```
 
 ## Caveats

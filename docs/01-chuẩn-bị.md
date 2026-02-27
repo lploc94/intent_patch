@@ -27,8 +27,8 @@ Script cài đặt dùng `sudo` để ghi vào `/Applications/`. Bạn cần là
 ### Bước 1: Tạo thư mục làm việc
 
 ```bash
-mkdir -p ~/projects/intent
-cd ~/projects/intent
+mkdir -p ~/projects/intent_patch
+cd ~/projects/intent_patch
 ```
 
 ### Bước 2: Backup file gốc

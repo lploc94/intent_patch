@@ -3,7 +3,7 @@
 ## Bước 1: Repack app.asar
 
 ```bash
-cd ~/projects/intent
+cd ~/projects/intent_patch
 npx asar pack extracted app.asar
 ```
 
@@ -118,10 +118,11 @@ Tất cả bước trên được gộp trong `install.sh`:
 bash install.sh
 ```
 
-Hoặc `apply.sh` (copy patches → verify → repack → install):
+Hoặc `apply.sh` (mặc định: discover → patch → verify → repack → install):
 
 ```bash
-bash apply.sh
+bash apply.sh              # Auto-patch (version-independent)
+bash apply.sh --legacy     # Legacy: copy pre-built patches (v0.2.11 only)
 ```
 
 ## Khôi phục
