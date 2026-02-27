@@ -1,0 +1,16 @@
+# Binary archives - too large for git
+app.asar
+app.asar.backup
+*.asar
+
+# Full extracted directory - contributors extract from their own app
+extracted/
+
+# macOS
+.DS_Store
+
+# Codex review artifacts
+.codex-review/
+
+# Node
+node_modules/
