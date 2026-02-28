@@ -1036,7 +1036,7 @@ def _build_load_models_body(acp, get_default_pid, ms_content, aps):
         f'{uss_var}.setAvailableModels(this.availableModels);'
         f'const n=r.map(o=>o.value),'
         f'{{providerId:c,modelId:l}}={parse_fn}(this.selectedModel);'
-        f'if(!(n.includes(this.selectedModel)||n.some(o=>o.endsWith(l)))&&this.availableModels.length>0)'
+        f'if(!(n.includes(this.selectedModel)||n.some(o=>o===l||o.endsWith(":"+l)))&&this.availableModels.length>0)'
         f'{{const o={yt_var}({se_var}.UI_MODEL_PREFERENCE,n)??this.availableModels[0].value;'
         f'{logger_var}.warn("Selected model not in merged list, using preferred default",'
         f'{{selectedModel:this.selectedModel,fallbackModel:o}}),this.selectModel(o)}}}}'
@@ -1550,6 +1550,20 @@ def repack_and_install(extracted_dir, files, skip_install=False):
     log("Installation complete! Open Intent by Augment to verify.", "OK")
 
 
+# ─── Manifest ──────────────────────────────────────────────────────────────────
+
+def write_patched_files_manifest(extracted_dir, files):
+    """Write patched-files.json so install.sh knows which chunk files to copy."""
+    manifest = {
+        "model_store": os.path.basename(files.model_store),
+        "model_picker": os.path.basename(files.model_picker),
+        "chunks_dir": CHUNKS_DIR_REL,
+    }
+    manifest_path = os.path.join(extracted_dir, "patched-files.json")
+    write_file(manifest_path, json.dumps(manifest, indent=2) + "\n")
+    log(f"Wrote patched-files.json ({manifest['model_store']}, {manifest['model_picker']})", "OK")
+
+
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1651,6 +1665,9 @@ def main():
         print("\n=== Dry Run Complete ===")
         print("  No files were modified.")
         return
+
+    # Write manifest for install.sh
+    write_patched_files_manifest(extracted_dir, files)
 
     # Phase 4: Verification
     if not verify_patches(patches, extracted_dir, files):

@@ -18,10 +18,19 @@ echo "Installing patched app.asar..."
 sudo cp "$ASAR" "$APP/Contents/Resources/app.asar"
 
 echo "Installing patched unpacked files..."
-sudo cp "$EXTRACTED/dist/renderer/app/immutable/chunks/BTPDcoPQ.js" \
-  "$UNPACKED/dist/renderer/app/immutable/chunks/BTPDcoPQ.js"
-sudo cp "$EXTRACTED/dist/renderer/app/immutable/chunks/CfKn743W.js" \
-  "$UNPACKED/dist/renderer/app/immutable/chunks/CfKn743W.js"
+MANIFEST="$EXTRACTED/patched-files.json"
+if [ ! -f "$MANIFEST" ]; then
+    echo "Error: patched-files.json not found at $MANIFEST"
+    echo "Run 'bash apply.sh' first to patch and generate the manifest."
+    exit 1
+fi
+read -r MODEL_STORE MODEL_PICKER CHUNKS_DIR <<< "$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+print(d['model_store'], d['model_picker'], d['chunks_dir'])
+" "$MANIFEST")"
+sudo cp "$EXTRACTED/$CHUNKS_DIR/$MODEL_STORE" "$UNPACKED/$CHUNKS_DIR/$MODEL_STORE"
+sudo cp "$EXTRACTED/$CHUNKS_DIR/$MODEL_PICKER" "$UNPACKED/$CHUNKS_DIR/$MODEL_PICKER"
 
 echo "Removing ElectronAsarIntegrity..."
 sudo /usr/libexec/PlistBuddy -c "Delete :ElectronAsarIntegrity" "$APP/Contents/Info.plist" 2>/dev/null || true

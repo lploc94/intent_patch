@@ -43,6 +43,22 @@ if [ "$1" = "--legacy" ]; then
     echo "Done."
 
     echo ""
+    echo "Writing patched-files.json manifest..."
+    python3 -c "
+import json, sys
+manifest = {
+    'model_store': 'BTPDcoPQ.js',
+    'model_picker': 'CfKn743W.js',
+    'chunks_dir': 'dist/renderer/app/immutable/chunks',
+}
+path = sys.argv[1] + '/patched-files.json'
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(manifest, f, indent=2)
+    f.write('\n')
+print('  OK  patched-files.json written')
+" "$EXTRACTED"
+
+    echo ""
     echo "=== Step 2: Verify ==="
     python3 "$SCRIPT_DIR/verify.py"
 

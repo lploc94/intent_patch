@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Verify all 8 patches are applied correctly in extracted/ directory."""
+"""Verify all 8 patches are applied correctly in extracted/ directory.
+
+NOTE: This script is for LEGACY mode only (Intent v0.2.11 with pre-built patches).
+      It checks for hardcoded chunk filenames (BTPDcoPQ.js, CfKn743W.js).
+      When using auto-patch mode (bash apply.sh), verification is done automatically
+      by autopatch.py using discovered filenames — do NOT use this script in that case.
+"""
 
 import sys
 import os
@@ -91,7 +97,7 @@ def main():
             errors.append(desc)
             continue
 
-        content = open(full_path, "r").read()
+        content = open(full_path, "r", encoding="utf-8").read()
         ok = True
 
         if must_contain and must_contain not in content:
