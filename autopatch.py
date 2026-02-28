@@ -481,6 +481,7 @@ def resolve_provider_config(extracted_dir, files):
 
     # ─── v0.2.11 FALLBACK ────────────────────────────────────────────────
     log("Using v0.2.11 regex resolution (fallback path)", "OK")
+    semantic_map = {}  # reset to avoid fast-path contamination
 
     # Identify semantic names by analyzing local variable definitions
     for alias, local in export_pairs.items():
@@ -1081,7 +1082,7 @@ def build_patches(files, pc_symbols, ms_symbols, mp_symbols, extracted_dir):
             f'{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}});'
         ),
         verify_present=f"{effect_fn}(()=>{{{get_fn}({epid});{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}});",
-        verify_absent="getModelsForProvider(",
+        verify_absent=None,  # search_regex handles old-state detection
     ))
 
     return patches
