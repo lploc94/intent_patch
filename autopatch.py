@@ -475,8 +475,9 @@ def resolve_provider_config(extracted_dir, files):
         required_in_pc = ["parseCompoundModelId", "ACP_PROVIDERS", "getDefaultProviderId"]
         missing = [s for s in required_in_pc if s not in resolved_semantic]
         if missing:
-            fatal(f"Failed to resolve provider config symbols: {missing}")
-        return symbols
+            log(f"Fast-path missing symbols {missing}, falling back to v0.2.11 regex", "WARN")
+        else:
+            return symbols
 
     # ─── v0.2.11 FALLBACK ────────────────────────────────────────────────
     log("Using v0.2.11 regex resolution (fallback path)", "OK")
@@ -1070,17 +1071,17 @@ def build_patches(files, pc_symbols, ms_symbols, mp_symbols, extracted_dir):
         name="Patch 7B: effect clears agentProviderModels",
         file_key="model_picker",
         patch_type="statement_replace",
-        # Search starting with `nt(()=>{const r=t(he);` to anchor to this specific effect.
-        # This prevents [\s\S]*? from matching across multiple effects and deleting code in between.
+        # Search starting with `nt(()=>{const VAR=t(he);` to anchor to this specific effect.
+        # Uses \w+ instead of literal var name to handle minifier variance.
         search_regex=(
-            rf'{re.escape(effect_fn)}\s*\(\s*\(\s*\)\s*=>\s*\{{\s*const\s+r\s*=\s*{re.escape(get_fn)}\s*\(\s*{re.escape(epid)}\s*\)\s*;[\s\S]*?getModelsForProvider[\s\S]*?catch\s*\([^}}]+\}}\s*\)\s*\}}\s*\)\s*;'
+            rf'{re.escape(effect_fn)}\s*\(\s*\(\s*\)\s*=>\s*\{{\s*(?:const|let)\s+\w+\s*=\s*{re.escape(get_fn)}\s*\(\s*{re.escape(epid)}\s*\)\s*;[\s\S]*?getModelsForProvider[\s\S]*?catch\s*\([^}}]+\}}\s*\)\s*\}}\s*\)\s*;'
         ),
         replace_template=(
             f'{effect_fn}(()=>{{{get_fn}({epid});'
             f'{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}});'
         ),
         verify_present=f"{effect_fn}(()=>{{{get_fn}({epid});{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}});",
-        verify_absent="getModelsForProvider(r).then",
+        verify_absent="getModelsForProvider(",
     ))
 
     return patches
