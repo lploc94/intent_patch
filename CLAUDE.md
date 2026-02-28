@@ -1,6 +1,6 @@
 # intent_patch
 
-Multi-provider patch cho Intent by Augment **v0.2.11**. Cho phép chọn model từ **tất cả** ACP providers đã cài trong cùng một dropdown, thay vì chỉ provider đang active.
+Multi-provider patch cho Intent by Augment **v0.2.11, v0.2.12**. Cho phép chọn model từ **tất cả** ACP providers đã cài trong cùng một dropdown, thay vì chỉ provider đang active.
 
 ## Commands
 

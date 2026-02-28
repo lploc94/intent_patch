@@ -252,21 +252,34 @@ def _discover_provider_config(chunks_dir):
     candidates = []
     for js_file in glob.glob(os.path.join(chunks_dir, "*.js")):
         filename = os.path.basename(js_file)
+        if filename.endswith(".map"):
+            continue
         content = read_file(js_file)
 
-        # Must have activeProviderId property
+        # --- Strategy 1: v0.2.11 (all-in-one minified chunk) ---
         has_active_provider = ".activeProviderId" in content
-        # Must have parseCompoundModelId-like function (split on ":")
         has_parse = '.split(":")' in content or ".split(':')" in content
-        # Must have isDefault flags
-        has_is_default = "isDefault:!0" in content or "isDefault:!1" in content
-        # Must have tier keys
+        has_is_default_minified = "isDefault:!0" in content or "isDefault:!1" in content
         has_tiers = "fast:" in content and "balanced:" in content and "smart:" in content
-        # Must have localStorage key
         has_ls_key = '"workspaces-active-provider"' in content
 
-        if has_active_provider and has_parse and has_is_default and has_tiers and has_ls_key:
+        if has_active_provider and has_parse and has_is_default_minified and has_tiers and has_ls_key:
             candidates.append((filename, js_file))
+            continue
+
+        # --- Strategy 2: v0.2.12+ (re-exported from provider-config.js) ---
+        # In v0.2.12, ACP_PROVIDERS and parseCompoundModelId are re-exported
+        # from dist/shared/config/provider-config.js into a chunk.
+        # The chunk exports these symbols and is imported by ModelStore.
+        has_acp_providers = "ACP_PROVIDERS" in content
+        has_parse_compound = "parseCompoundModelId" in content
+        has_get_default_provider = "getDefaultProviderId" in content
+        has_is_default_any = "isDefault" in content
+        has_provider_model_tiers = "PROVIDER_MODEL_TIERS" in content
+
+        if has_acp_providers and has_parse_compound and has_get_default_provider and has_is_default_any and has_provider_model_tiers:
+            candidates.append((filename, js_file))
+            continue
 
     if len(candidates) == 0:
         fatal("Provider config chunk not found. No file matches structural fingerprint.")
@@ -374,36 +387,108 @@ def resolve_provider_config(extracted_dir, files):
 
     symbols = SymbolMap()
 
-    # Parse export statement: export{localVar as alias, ...}
+    # Parse export statement: export{localVar as alias, ...} or export{localVar, ...}
     export_match = re.search(r'export\{([^}]+)\}', content)
     if not export_match:
         fatal("Cannot parse export statement in provider config")
 
     exports_str = export_match.group(1)
-    export_pairs = {}
+    export_pairs = {}  # alias → local_var
+    local_to_alias = {}  # local_var → alias
     for pair in exports_str.split(","):
         pair = pair.strip()
         m = re.match(r'(\w+)\s+as\s+(\w+)', pair)
         if m:
             local_var, alias = m.group(1), m.group(2)
             export_pairs[alias] = local_var
+            local_to_alias[local_var] = alias
+        elif re.match(r'^\w+$', pair):
+            # export{foo} — no alias, exported as itself
+            export_pairs[pair] = pair
+            local_to_alias[pair] = pair
 
     log(f"Parsed {len(export_pairs)} exports", "OK")
 
+    semantic_map = {}
+
+    # ─── v0.2.12 FAST PATH ───────────────────────────────────────────────
+    # In v0.2.12, provider-config.js is re-bundled into a chunk that contains:
+    #   Object.freeze(Object.defineProperty({__proto__:null,
+    #       ACP_PROVIDERS:s, PROVIDER_MODEL_TIERS:a,
+    #       parseCompoundModelId:f, getDefaultProviderId:v, ...
+    #   }, Symbol.toStringTag, {value:"Module"}))
+    # This directly maps semantic names to local variables.
+    freeze_match = re.search(
+        r'Object\.freeze\(Object\.defineProperty\(\{__proto__:null,([^}]+)\}',
+        content
+    )
+    if freeze_match:
+        log("Using v0.2.12 Object.freeze resolution (fast path)", "OK")
+        # Parse ALL freeze blocks in the file (there may be multiple)
+        all_freeze = re.finditer(
+            r'Object\.freeze\(Object\.defineProperty\(\{__proto__:null,([^}]+)\}',
+            content
+        )
+        for fm in all_freeze:
+            freeze_str = fm.group(1)
+            for entry in freeze_str.split(","):
+                entry = entry.strip()
+                m = re.match(r'(\w+):(\w+)', entry)
+                if m:
+                    sem_name, local_var = m.group(1), m.group(2)
+                    alias = local_to_alias.get(local_var, local_var)
+                    semantic_map[sem_name] = alias
+                    log(f"  {sem_name} → export '{alias}' (local '{local_var}')", "OK")
+
+        # Map known canonical names
+        canonical = {
+            "parseCompoundModelId": "parseCompoundModelId",
+            "ACP_PROVIDERS": "ACP_PROVIDERS",
+            "getDefaultProviderId": "getDefaultProviderId",
+            "getProviderConfig": "getProviderConfigById",  # alias rename
+            "getProviderConfigById": "getProviderConfigById",
+            "getDefaultModelForProvider": "getDefaultModelForProvider",
+            "isModelValidForProvider": "isModelValidForProvider",
+            "PROVIDER_MODEL_TIERS": "PROVIDER_MODEL_TIERS",
+            "activeProviderStore": "activeProviderStore",
+        }
+
+        resolved_semantic = {}
+        for freeze_name, our_name in canonical.items():
+            if freeze_name in semantic_map:
+                resolved_semantic[our_name] = semantic_map[freeze_name]
+
+        # activeProviderStore may be in a separate freeze block (v0.2.11)
+        # or in a separate chunk entirely (v0.2.12).
+        if "activeProviderStore" not in resolved_semantic:
+            # In v0.2.12, the activeProviderStore is imported in ModelStore
+            # from a separate chunk (e.g., rKIka1BV.js), not from provider config.
+            # We'll handle this in resolve_model_store instead.
+            log("activeProviderStore not in provider config (expected for v0.2.12)", "OK")
+            # Mark it so downstream knows to look elsewhere
+            resolved_semantic["_v0212_mode"] = True
+        else:
+            log(f"activeProviderStore → '{resolved_semantic['activeProviderStore']}' (from freeze block)", "OK")
+
+        symbols.provider_exports = resolved_semantic
+        # Validate essential symbols
+        required_in_pc = ["parseCompoundModelId", "ACP_PROVIDERS", "getDefaultProviderId"]
+        missing = [s for s in required_in_pc if s not in resolved_semantic]
+        if missing:
+            fatal(f"Failed to resolve provider config symbols: {missing}")
+        return symbols
+
+    # ─── v0.2.11 FALLBACK ────────────────────────────────────────────────
+    log("Using v0.2.11 regex resolution (fallback path)", "OK")
+
     # Identify semantic names by analyzing local variable definitions
-    # ACP_PROVIDERS: object with isDefault flags
     for alias, local in export_pairs.items():
-        # Find the variable definition and analyze its shape
         pass  # Will be done below
 
     # Strategy: identify by unique characteristics of each function/object
-    semantic_map = {}
 
     # parseCompoundModelId: function with .split(":")
-    # Look for: function LOCAL(r){...r.split(":")...} or const LOCAL=r=>{...}
     for alias, local in export_pairs.items():
-        # Check if this local var is the parseCompoundModelId function
-        # Pattern: function that takes one arg, splits on ":", returns {providerId, modelId}
         pat = re.compile(
             rf'function\s+{re.escape(local)}\s*\([^)]*\)\s*\{{[^}}]*\.split\(":', re.DOTALL
         )
@@ -413,11 +498,7 @@ def resolve_provider_config(extracted_dir, files):
             break
 
     # ACP_PROVIDERS: object with provider entries having isDefault
-    # Pattern: const LOCAL={auggie:{...isDefault:!0...}, ...}
-    # Find object assigned to local var that contains isDefault
     for alias, local in export_pairs.items():
-        # Look for: const LOCAL={...isDefault:!0...isDefault:!1...}
-        # This is a large object literal
         pat = re.compile(
             rf'(?:const|let|var)\s+{re.escape(local)}\s*=\s*\{{[^;]*?isDefault:!0[^;]*?isDefault:!1',
             re.DOTALL
@@ -428,14 +509,11 @@ def resolve_provider_config(extracted_dir, files):
             break
 
     # activeProviderStore: instance of class with activeProviderId + setActiveProvider
-    # Look for: const LOCAL=new CLASS  where CLASS has .activeProviderId
     for alias, local in export_pairs.items():
-        # Pattern: const LOCAL=new CLASSNAME, and CLASSNAME has activeProviderId
         pat = re.compile(rf'(?:const|let|var)\s+{re.escape(local)}\s*=\s*new\s+(\w+)')
         m = pat.search(content)
         if m:
             class_name = m.group(1)
-            # Check if class has activeProviderId and setActiveProvider
             class_pat = re.compile(
                 rf'class\s+{re.escape(class_name)}\b[^{{]*\{{.*?activeProviderId.*?setActiveProvider',
                 re.DOTALL
@@ -445,10 +523,8 @@ def resolve_provider_config(extracted_dir, files):
                 log(f"activeProviderStore → export '{alias}' (local '{local}')", "OK")
                 break
 
-    # getDefaultProviderId: function that calls getDefaultProviderConfig().id or returns default
+    # getDefaultProviderId: function that returns default provider config id
     for alias, local in export_pairs.items():
-        # Simple function that returns the default provider ID
-        # Pattern: function LOCAL(){return FUNC().id} or similar
         pat = re.compile(
             rf'function\s+{re.escape(local)}\s*\(\)\s*\{{\s*return\s+\w+\(\)\.id\s*\}}',
         )
@@ -463,7 +539,6 @@ def resolve_provider_config(extracted_dir, files):
         for alias, local in export_pairs.items():
             if alias in semantic_map.values():
                 continue
-            # Pattern: function LOCAL(r){...ACP_LOCAL[r]...}
             pat = re.compile(
                 rf'function\s+{re.escape(local)}\s*\(\w+\)\s*\{{[^}}]*{re.escape(acp_local)}\[',
                 re.DOTALL
@@ -473,16 +548,14 @@ def resolve_provider_config(extracted_dir, files):
                 log(f"getProviderConfigById → export '{alias}' (local '{local}')", "OK")
                 break
 
-    # getDefaultModelForProvider: function taking 2 args, accesses PROVIDER_MODEL_TIERS
+    # getDefaultModelForProvider: function taking 2 args
     for alias, local in export_pairs.items():
         if alias in semantic_map.values():
             continue
-        # Pattern: function with 2 params that references tier object
         pat = re.compile(
             rf'function\s+{re.escape(local)}\s*\(\w+\s*,\s*\w+\)\s*\{{',
         )
         if pat.search(content):
-            # Check it references balanced/fast/smart tiers
             func_start = pat.search(content).start()
             snippet = content[func_start:func_start + 500]
             if "auggie" in snippet or "balanced" in snippet:
@@ -490,7 +563,7 @@ def resolve_provider_config(extracted_dir, files):
                 log(f"getDefaultModelForProvider → export '{alias}' (local '{local}')", "OK")
                 break
 
-    # isModelValidForProvider: function that calls parseCompoundModelId then compares
+    # isModelValidForProvider: function that calls parseCompoundModelId
     parse_local = export_pairs.get(semantic_map.get("parseCompoundModelId", ""), "")
     if parse_local:
         for alias, local in export_pairs.items():
@@ -505,11 +578,10 @@ def resolve_provider_config(extracted_dir, files):
                 log(f"isModelValidForProvider → export '{alias}' (local '{local}')", "OK")
                 break
 
-    # PROVIDER_MODEL_TIERS: object with fast/balanced/smart entries per provider
+    # PROVIDER_MODEL_TIERS: object with fast/balanced/smart
     for alias, local in export_pairs.items():
         if alias in semantic_map.values():
             continue
-        # Pattern: const LOCAL={auggie:{fast:"...",balanced:"...",smart:"..."}, ...}
         pat = re.compile(
             rf'(?:const|let|var)\s+{re.escape(local)}\s*=\s*\{{[^;]*?fast:\s*"[^"]*"[^;]*?balanced:\s*"[^"]*"[^;]*?smart:\s*"[^"]*"',
             re.DOTALL
@@ -564,9 +636,32 @@ def resolve_model_store(extracted_dir, files, pc_symbols):
     # Build resolved map: semanticName → local alias in ModelStore
     resolved = {}
     for semantic_name, export_alias in pc_symbols.provider_exports.items():
+        if semantic_name.startswith("_"):
+            continue  # skip internal flags
         if export_alias in import_map:
             resolved[semantic_name] = import_map[export_alias]
             log(f"{semantic_name} → '{import_map[export_alias]}' (via export '{export_alias}')", "OK")
+
+    # --- v0.2.12: activeProviderStore from separate chunk ---
+    is_v0212 = pc_symbols.provider_exports.get("_v0212_mode", False)
+    if is_v0212 and "activeProviderStore" not in resolved:
+        # In v0.2.12, activeProviderStore is imported from a DIFFERENT chunk.
+        # Scan all imports to find the one whose alias is used with .activeProviderId
+        all_imports = re.findall(r'import\s*\{([^}]+)\}\s*from\s*"([^"]+)"', content)
+        for imp_str, imp_source in all_imports:
+            if imp_source.endswith(pc_filename):
+                continue  # Already handled
+            for pair in imp_str.split(","):
+                pair = pair.strip()
+                m2 = re.match(r'(\w+)\s+as\s+(\w+)', pair)
+                local_alias = m2.group(2) if m2 else pair
+                # Check if this alias is used with .activeProviderId in the file
+                if f"{local_alias}.activeProviderId" in content:
+                    resolved["activeProviderStore"] = local_alias
+                    log(f"activeProviderStore → '{local_alias}' (from {os.path.basename(imp_source)})", "OK")
+                    break
+            if "activeProviderStore" in resolved:
+                break
 
     symbols.resolved = resolved
 
@@ -667,10 +762,20 @@ def resolve_model_picker(extracted_dir, files, pc_symbols, ms_symbols):
 
     # activeProviderStore: find VAR.activeProviderId pattern
     aps_alias = resolved.get("activeProviderStore")
+    if not aps_alias:
+        # v0.2.12 fallback: activeProviderStore comes from a separate chunk.
+        # Discover it by finding the VAR.activeProviderId pattern in content.
+        aps_pat = re.compile(r'(\w+)\.activeProviderId')
+        aps_matches = aps_pat.findall(content)
+        if aps_matches:
+            from collections import Counter
+            aps_counter = Counter(aps_matches)
+            aps_alias = aps_counter.most_common(1)[0][0]
+            resolved["activeProviderStore"] = aps_alias
     if aps_alias:
         log(f"activeProviderStore → '{aps_alias}' in ModelPicker", "OK")
     else:
-        log("activeProviderStore not imported in ModelPicker", "WARN")
+        log("activeProviderStore not found in ModelPicker", "WARN")
 
     # getProviderConfigById
     gpcbi_alias = resolved.get("getProviderConfigById")
@@ -730,28 +835,34 @@ def resolve_model_picker(extracted_dir, files, pc_symbols, ms_symbols):
         # Find the effect block and extract set alias from it
         # Pattern: EFFECT(()=>{...SET(someVar, null)...})
         set_pat = re.compile(
-            r'(\w+)\s*\(\s*(\w+)\s*,\s*null\s*\)'
+            r'(\w+)\s*\(\s*(\w+)\s*,\s*(?:null|!0|!1)\s*\)'
         )
-        # Search near the effect for set calls
+        # Search for the CORRECT effect — the one containing getModelsForProvider or activeProviderId
         if effect_alias:
-            # Find effect block
             eff_search = f'{effect_alias}(()=>{{'
-            eff_idx = content.find(eff_search)
-            if eff_idx >= 0:
+            start_pos = 0
+            while True:
+                eff_idx = content.find(eff_search, start_pos)
+                if eff_idx < 0:
+                    break
                 # Extract ~500 chars of effect body
                 eff_body = content[eff_idx:eff_idx + 500]
-                set_matches = set_pat.findall(eff_body)
-                if set_matches:
-                    set_alias = set_matches[0][0]
-                    resolved["set"] = set_alias
-                    # Also identify agentProviderModels, isLoadingAgentModels, agentModelError
-                    resolved["agentProviderModels"] = set_matches[0][1]
-                    if len(set_matches) > 1:
-                        resolved["isLoadingAgentModels"] = set_matches[1][1]
-                    if len(set_matches) > 2:
-                        resolved["agentModelError"] = set_matches[2][1]
-                    log(f"set → '{set_alias}'", "OK")
-                    log(f"agentProviderModels → '{set_matches[0][1]}'", "OK")
+                # Only use this block if it contains the provider-related code
+                if 'getModelsForProvider' in eff_body or 'activeProviderId' in eff_body:
+                    set_matches = set_pat.findall(eff_body)
+                    if set_matches:
+                        set_alias = set_matches[0][0]
+                        resolved["set"] = set_alias
+                        # Also identify agentProviderModels, isLoadingAgentModels, agentModelError
+                        resolved["agentProviderModels"] = set_matches[0][1]
+                        if len(set_matches) > 1:
+                            resolved["isLoadingAgentModels"] = set_matches[1][1]
+                        if len(set_matches) > 2:
+                            resolved["agentModelError"] = set_matches[2][1]
+                        log(f"set → '{set_alias}'", "OK")
+                        log(f"agentProviderModels → '{set_matches[0][1]}', isLoadingAgentModels → '{set_matches[1][1] if len(set_matches) > 1 else '?'}', agentModelError → '{set_matches[2][1] if len(set_matches) > 2 else '?'}'", "OK")
+                    break
+                start_pos = eff_idx + len(eff_search)
 
     # Find modelStore instance: accessed as VAR.availableModels
     ms_pat = re.compile(r'(\w+)\.availableModels')
@@ -959,15 +1070,16 @@ def build_patches(files, pc_symbols, ms_symbols, mp_symbols, extracted_dir):
         name="Patch 7B: effect clears agentProviderModels",
         file_key="model_picker",
         patch_type="statement_replace",
-        # Search for the effect containing getModelsForProvider
+        # Search starting with `nt(()=>{const r=t(he);` to anchor to this specific effect.
+        # This prevents [\s\S]*? from matching across multiple effects and deleting code in between.
         search_regex=(
-            rf'{re.escape(effect_fn)}\s*\(\s*\(\s*\)\s*=>\s*\{{[^}}]*?getModelsForProvider[^}}]*?\}}\s*\)'
+            rf'{re.escape(effect_fn)}\s*\(\s*\(\s*\)\s*=>\s*\{{\s*const\s+r\s*=\s*{re.escape(get_fn)}\s*\(\s*{re.escape(epid)}\s*\)\s*;[\s\S]*?getModelsForProvider[\s\S]*?catch\s*\([^}}]+\}}\s*\)\s*\}}\s*\)\s*;'
         ),
         replace_template=(
             f'{effect_fn}(()=>{{{get_fn}({epid});'
-            f'{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}})'
+            f'{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}});'
         ),
-        verify_present=f"{effect_fn}(()=>{{{get_fn}({epid});{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}})",
+        verify_present=f"{effect_fn}(()=>{{{get_fn}({epid});{set_fn}({apm},null),{set_fn}({ilam},!1),{set_fn}({ame},null)}});",
         verify_absent="getModelsForProvider(r).then",
     ))
 
