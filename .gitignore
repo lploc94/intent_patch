@@ -11,6 +11,9 @@ extracted/
 # macOS
 .DS_Store
 
+# Local patch state
+.patched-version
+
 # Codex review artifacts
 .codex-review/
 
