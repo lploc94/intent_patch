@@ -1,6 +1,8 @@
 # Binary archives - too large for git
 app.asar
 app.asar.backup
+app.asar.backup.unpacked
+*.unpacked
 *.asar
 
 # Full extracted directory - contributors extract from their own app
