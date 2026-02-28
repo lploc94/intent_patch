@@ -145,7 +145,7 @@ Xem thêm [PATCHES.md](PATCHES.md) để tra cứu nhanh từng patch và symbol
 
 1. Extract app gốc nếu chưa có: `npx asar extract app.asar.backup extracted`
 2. Sửa file trong `extracted/`
-3. Chạy `python3 verify.py` (cập nhật verify.py nếu thêm check mới)
+3. Chạy `python3 verify.py` (legacy mode only — v0.2.11; auto mode verifies automatically)
 4. Test: `npx asar pack extracted app.asar && bash install.sh`
 5. Xác nhận trên Intent
 6. Copy file đã sửa vào `patches/`: `cp extracted/<path> patches/<path>`
