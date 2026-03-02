@@ -1,0 +1,375 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const {
+  STATE_DIR, INTENT_APP, INTENT_PLIST, VERSION_FILE,
+  DEFAULT_EXTRACTED, BACKUP_ASAR, BACKUP_UNPACKED, OUTPUT_ASAR,
+  CHUNKS_DIR_REL,
+} = require('./constants');
+const { log, fatal, readFile, writeFile, runCmd, runCmdArgs } = require('./utils');
+const { preflightChecks } = require('./preflight');
+const { discoverFiles } = require('./discovery');
+const { resolveSymbols } = require('./symbols');
+const { buildPatches } = require('./patches');
+const { applyPatches } = require('./engine');
+const { verifyPatches } = require('./verify');
+const { extractApp, repackAndInstall, writePatchedFilesManifest } = require('./install');
+
+function parseArgs(argv) {
+  const args = {
+    extractedDir: null,
+    dryRun: false,
+    discoverOnly: false,
+    noInstall: false,
+    legacy: false,
+    status: false,
+  };
+
+  const rest = argv.slice(2);
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--extracted-dir') {
+      if (i + 1 >= rest.length || rest[i + 1].startsWith('-')) {
+        fatal('--extracted-dir requires a path argument');
+      }
+      args.extractedDir = rest[++i];
+    } else if (arg === '--dry-run') {
+      args.dryRun = true;
+    } else if (arg === '--discover-only') {
+      args.discoverOnly = true;
+    } else if (arg === '--no-install') {
+      args.noInstall = true;
+    } else if (arg === '--legacy') {
+      args.legacy = true;
+    } else if (arg === '--status') {
+      args.status = true;
+    } else if (arg === '--help' || arg === '-h') {
+      console.log(`Usage: intent-patch [options]
+
+Options:
+  --extracted-dir <path>  Path to pre-extracted app directory
+  --dry-run               Show what would be done without modifying files
+  --discover-only         Only discover files and resolve symbols
+  --no-install            Patch and verify but don't install
+  --legacy                Legacy mode: copy pre-built patches (v0.2.11 only)
+  --status                Print patch status and exit
+  --help, -h              Show this help`);
+      process.exit(0);
+    } else if (arg.startsWith('-')) {
+      fatal(`Unknown option: ${arg}\nRun with --help for usage.`);
+    } else {
+      // Bare positional path as --extracted-dir
+      args.extractedDir = arg;
+    }
+  }
+
+  return args;
+}
+
+function getAppVersion() {
+  if (!fs.existsSync(INTENT_APP)) return '';
+  try {
+    return runCmd(`defaults read "${INTENT_PLIST}" CFBundleShortVersionString`, { check: false }) || '';
+  } catch { return ''; }
+}
+
+function getPatchedVersion() {
+  if (!fs.existsSync(VERSION_FILE)) return '';
+  try { return readFile(VERSION_FILE).trim(); } catch { return ''; }
+}
+
+function savePatchedVersion(version) {
+  writeFile(VERSION_FILE, version + '\n');
+}
+
+function handleStatus() {
+  const appVersion = getAppVersion();
+  const patchedVersion = getPatchedVersion();
+
+  if (!appVersion) {
+    console.log('[intent-patch] Intent not found');
+    process.exit(1);
+  } else if (appVersion === patchedVersion) {
+    console.log(`[intent-patch] v${appVersion} \u2014 patched \u2713`);
+  } else if (!patchedVersion) {
+    console.log(`[intent-patch] v${appVersion} \u2014 not patched! Run: npx github:lploc94/intent_patch`);
+  } else {
+    console.log(`[intent-patch] v${appVersion} \u2014 update detected (was v${patchedVersion})! Run: npx github:lploc94/intent_patch`);
+  }
+  process.exit(0);
+}
+
+async function handleLegacy(args) {
+  console.log('=== Legacy Mode (pre-built patches) ===');
+  console.log('Warning: Legacy mode only works for Intent v0.2.11');
+  console.log('');
+
+  const patchesDir = path.join(__dirname, '..', 'patches');
+  const extractedDir = args.extractedDir || DEFAULT_EXTRACTED;
+
+  if (!fs.existsSync(extractedDir)) {
+    fatal(`extracted directory not found at ${extractedDir}\n\nExtract first:\n  npx intent-patch (without --legacy)`);
+  }
+
+  // Copy patched files
+  console.log('=== Step 1: Copy patched files ===');
+  const filesToCopy = [
+    'dist/features/agent/services/agent-factory.js',
+    'dist/renderer/app/immutable/chunks/BTPDcoPQ.js',
+    'dist/renderer/app/immutable/chunks/CfKn743W.js',
+  ];
+  for (const rel of filesToCopy) {
+    const src = path.join(patchesDir, rel);
+    const dst = path.join(extractedDir, rel);
+    if (!fs.existsSync(src)) fatal(`Patch file not found: ${src}`);
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(src, dst);
+  }
+  console.log('Done.');
+
+  // Write manifest
+  console.log('\nWriting patched-files.json manifest...');
+  const manifest = {
+    model_store: 'BTPDcoPQ.js',
+    model_picker: 'CfKn743W.js',
+    chunks_dir: 'dist/renderer/app/immutable/chunks',
+  };
+  writeFile(path.join(extractedDir, 'patched-files.json'), JSON.stringify(manifest, null, 2) + '\n');
+  console.log('  OK  patched-files.json written');
+
+  // Verify (hardcoded v0.2.11 checks)
+  console.log('\n=== Step 2: Verify ===');
+  const checks = [
+    { rel: 'dist/features/agent/services/agent-factory.js', desc: 'Patch 6A: ACP_PROVIDERS import',
+      must_contain: 'import { ACP_PROVIDERS, getDefaultModelForProvider' },
+    { rel: 'dist/features/agent/services/agent-factory.js', desc: 'Patch 6B: derive provider from model ID',
+      must_contain: "if (!provider && config.model) {\n                const { providerId } = parseCompoundModelId(config.model);",
+      must_not_contain: "if (!provider && config.model && config.model.includes(':'))" },
+    { rel: 'dist/features/agent/services/agent-factory.js', desc: 'Patch 6C: safety-net align provider',
+      must_contain: 'Safety net: aligning provider to match compound model',
+      must_not_contain: 'Safety net: cross-provider model mismatch in agent creation' },
+    { rel: 'dist/features/agent/services/agent-factory.js', desc: 'Patch 6C+: re-validate after alignment',
+      must_contain: 'Re-resolved model after provider alignment' },
+    { rel: 'dist/renderer/app/immutable/chunks/BTPDcoPQ.js', desc: 'Patch 1: loadModels fetches all providers',
+      must_contain: 'loadedForProviderId==="__all__"',
+      must_not_contain: 'loadedForProviderId===e||this.isLoadingModels' },
+    { rel: 'dist/renderer/app/immutable/chunks/BTPDcoPQ.js', desc: 'Patch 1: Promise.allSettled',
+      must_contain: 'Promise.allSettled' },
+    { rel: 'dist/renderer/app/immutable/chunks/BTPDcoPQ.js', desc: 'Patch 2: reloadModelsForProvider simplified',
+      must_contain: 'Reloading models for all providers',
+      must_not_contain: 'Reloading models for provider change' },
+    { rel: 'dist/renderer/app/immutable/chunks/BTPDcoPQ.js', desc: 'Patch 3: selectModel uses parsed providerId',
+      must_contain: 'Ce(e).providerId;this.providerModels.set(t,e)',
+      must_not_contain: 'H.activeProviderId;this.providerModels.set(t,e)' },
+    { rel: 'dist/renderer/app/immutable/chunks/BTPDcoPQ.js', desc: 'Patch 4: getGroupedModels groups by provider',
+      must_contain: 'getGroupedModels(){if(this.availableModels.length===0)return[];const e=new Map',
+      must_not_contain: 'getGroupedModels(){const e=H.activeProviderId' },
+    { rel: 'dist/renderer/app/immutable/chunks/CfKn743W.js', desc: 'Patch 7A: isAgentProviderOverride always false',
+      must_contain: 'Ie=H(()=>!1)',
+      must_not_contain: 'Ie=H(()=>t(be)!==mt.activeProviderId)' },
+    { rel: 'dist/renderer/app/immutable/chunks/CfKn743W.js', desc: 'Patch 7B: effect clears agentProviderModels',
+      must_contain: 'nt(()=>{t(be);h(xe,null),h(re,!1),h(se,null)})',
+      must_not_contain: 'ce.getModelsForProvider(r).then' },
+  ];
+
+  let passed = 0;
+  let failedCount = 0;
+  const errs = [];
+  for (const check of checks) {
+    const fullPath = path.join(extractedDir, check.rel);
+    if (!fs.existsSync(fullPath)) {
+      console.log(`  MISSING  ${check.desc}`);
+      failedCount++;
+      errs.push(check.desc);
+      continue;
+    }
+    const content = readFile(fullPath);
+    let ok = true;
+    if (check.must_contain && !content.includes(check.must_contain)) {
+      console.log(`  FAIL     ${check.desc}`);
+      console.log('           Expected pattern not found');
+      ok = false;
+    }
+    if (check.must_not_contain && content.includes(check.must_not_contain)) {
+      console.log(`  FAIL     ${check.desc}`);
+      console.log('           Old pattern still present');
+      ok = false;
+    }
+    if (ok) {
+      console.log(`  OK       ${check.desc}`);
+      passed++;
+    } else {
+      failedCount++;
+      errs.push(check.desc);
+    }
+  }
+
+  console.log(`\nResults: ${passed} passed, ${failedCount} failed, ${passed + failedCount} total`);
+  if (failedCount > 0) {
+    console.log('\nFailed checks:');
+    for (const e of errs) console.log(`  - ${e}`);
+    fatal('Legacy verification failed');
+  }
+  console.log('All patches verified.');
+
+  // Repack + Install
+  if (!args.noInstall) {
+    const { preflightChecks: pf } = require('./preflight');
+    const asarMode = pf(false);
+    await repackAndInstall(extractedDir, {
+      model_store: path.join(CHUNKS_DIR_REL, 'BTPDcoPQ.js'),
+      model_picker: path.join(CHUNKS_DIR_REL, 'CfKn743W.js'),
+      agent_factory: 'dist/features/agent/services/agent-factory.js',
+    }, false, asarMode);
+    savePatchedVersion(getAppVersion());
+  } else {
+    // Just repack
+    const { checkAsarApi } = require('./preflight');
+    const asarMode = checkAsarApi();
+    try {
+      if (asarMode === 'library') {
+        const asar = require('@electron/asar');
+        await asar.createPackage(extractedDir, OUTPUT_ASAR);
+      } else {
+        runCmdArgs(['npx', '--yes', 'asar', 'pack', extractedDir, OUTPUT_ASAR], { timeout: 300000 });
+      }
+      log(`Repacked to ${OUTPUT_ASAR}`, 'OK');
+    } catch (e) {
+      fatal(`asar pack failed: ${e.message}`);
+    }
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+
+  // Ensure state directory exists
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+
+  // --status: print and exit
+  if (args.status) {
+    handleStatus();
+    return;
+  }
+
+  // --legacy: legacy mode
+  if (args.legacy) {
+    await handleLegacy(args);
+    return;
+  }
+
+  console.log('='.repeat(60));
+  console.log('  Intent Multi-Provider Auto-Patcher');
+  console.log('='.repeat(60));
+
+  const skipInstall = args.noInstall || args.dryRun || args.discoverOnly;
+  const extractedDir = args.extractedDir || DEFAULT_EXTRACTED;
+
+  // Version tracking
+  const appVersion = getAppVersion();
+  const patchedVersion = getPatchedVersion();
+
+  if (appVersion) {
+    console.log(`  App version:     ${appVersion}`);
+    console.log(`  Patched version: ${patchedVersion || 'none'}`);
+
+    if (appVersion === patchedVersion) {
+      console.log(`  Mode: Repair (re-patch v${appVersion})`);
+    } else {
+      if (patchedVersion) {
+        console.log(`  ! Version changed: v${patchedVersion} \u2192 v${appVersion}`);
+      }
+      console.log('  Mode: Install');
+      // Clean stale artifacts
+      if (!args.extractedDir) {
+        for (const p of [DEFAULT_EXTRACTED, BACKUP_ASAR, BACKUP_UNPACKED, OUTPUT_ASAR]) {
+          if (fs.existsSync(p)) {
+            try {
+              const stat = fs.lstatSync(p);
+              if (stat.isDirectory()) {
+                fs.rmSync(p, { recursive: true, force: true });
+              } else {
+                fs.unlinkSync(p);
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      }
+    }
+    console.log('');
+  }
+
+  // Phase 0: Preflight
+  const asarMode = preflightChecks(skipInstall);
+
+  // Extract if needed (extractApp handles stale detection internally)
+  if (!args.extractedDir) {
+    await extractApp(extractedDir, asarMode);
+  }
+
+  if (!fs.existsSync(extractedDir) || !fs.statSync(extractedDir).isDirectory()) {
+    fatal(`Extracted directory not found: ${extractedDir}`);
+  }
+
+  // Phase 1: File Discovery
+  const files = discoverFiles(extractedDir);
+
+  // Phase 2: Symbol Resolution
+  const { pcSymbols, msSymbols, mpSymbols } = resolveSymbols(extractedDir, files);
+
+  if (args.discoverOnly) {
+    console.log('\n=== Discovery Complete ===');
+    console.log(`  Provider Config: ${files.provider_config}`);
+    console.log(`  ModelStore:      ${files.model_store}`);
+    console.log(`  ModelPicker:     ${files.model_picker}`);
+    console.log(`  Agent Factory:   ${files.agent_factory}`);
+    console.log(`  Agent Interact:  ${files.agent_interaction_tools || '(not found \u2014 patches 8A-8D skipped)'}`);
+    console.log('\n  Provider Config Exports:');
+    for (const [name, alias] of Object.entries(pcSymbols.provider_exports)) {
+      console.log(`    ${name} \u2192 '${alias}'`);
+    }
+    console.log('\n  ModelStore Resolved:');
+    for (const [name, alias] of Object.entries(msSymbols.resolved)) {
+      console.log(`    ${name} \u2192 '${alias}'`);
+    }
+    console.log('\n  ModelPicker Resolved:');
+    for (const [name, alias] of Object.entries(mpSymbols.resolved)) {
+      console.log(`    ${name} \u2192 '${alias}'`);
+    }
+    return;
+  }
+
+  // Phase 3: Build and Apply Patches
+  const patches = buildPatches(files, pcSymbols, msSymbols, mpSymbols, extractedDir);
+  const success = applyPatches(patches, extractedDir, files, args.dryRun);
+
+  if (!success) {
+    fatal('Some patches failed to apply. See errors above.');
+  }
+
+  if (args.dryRun) {
+    console.log('\n=== Dry Run Complete ===');
+    console.log('  No files were modified.');
+    return;
+  }
+
+  // Write manifest
+  writePatchedFilesManifest(extractedDir, files);
+
+  // Phase 4: Verification
+  if (!verifyPatches(patches, extractedDir, files)) {
+    fatal('Verification failed. Patches may be incomplete.');
+  }
+
+  // Phase 5: Repack & Install
+  await repackAndInstall(extractedDir, files, args.noInstall, asarMode);
+
+  // Save patched version
+  if (!args.noInstall && appVersion) {
+    savePatchedVersion(appVersion);
+    console.log(`\n  \u2713 Patched v${appVersion}`);
+  }
+}
+
+module.exports = { main };

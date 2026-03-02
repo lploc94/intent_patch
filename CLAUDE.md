@@ -1,49 +1,66 @@
 # intent_patch
 
-Multi-provider patch cho Intent by Augment **v0.2.11, v0.2.12**. Cho phép chọn model từ **tất cả** ACP providers đã cài trong cùng một dropdown, thay vì chỉ provider đang active.
+Multi-provider patch cho Intent by Augment. Cho phép chọn model từ **tất cả** ACP providers đã cài trong cùng một dropdown, thay vì chỉ provider đang active. **Pure Node.js** — zero dependencies ngoài `@electron/asar`.
 
 ## Commands
 
 ```bash
-# Auto-patch (version-independent): discover → patch → verify → repack → install
-bash apply.sh
+# Chạy từ xa (không cần clone):
+npx github:lploc94/intent_patch
 
-# Auto-patch without installing
-bash apply.sh --no-install
-
-# Discover files + resolve symbols only
-bash apply.sh --discover-only
-
-# Legacy mode (v0.2.11 pre-built patches only)
-bash apply.sh --legacy
-
-# Extract app gốc
-npx asar extract app.asar.backup extracted
-
-# Verify patches (11 assertions across 3 files, v0.2.11)
-python3 verify.py
-
-# Repack thủ công
-npx asar pack extracted app.asar
-
-# Install thủ công (cần sudo)
-bash install.sh
+# Hoặc local:
+node autopatch.js                       # Full pipeline: extract → patch → verify → repack → install
+node autopatch.js --no-install          # Patch + verify, không install
+node autopatch.js --discover-only       # Chỉ tìm files + resolve symbols
+node autopatch.js --dry-run             # Xem preview, không sửa file
+node autopatch.js --status              # Kiểm tra trạng thái patch
+node autopatch.js --legacy              # Legacy mode: copy pre-built patches (v0.2.11 only)
+node autopatch.js --extracted-dir ./ext # Dùng extracted dir có sẵn
 ```
 
 ## Architecture
 
-### 3 Patched Files
+### File Structure
 
-| File | Vai trò | Patches |
+```
+intent_patch/
+  package.json              # bin: "intent-patch" → autopatch.js
+  autopatch.js              # #!/usr/bin/env node — entry point
+  src/
+    constants.js            # Paths, markers, fixed values
+    utils.js                # log, fatal, runCmd, runCmdArgs, readFile, writeFile, escapeRegExp
+    preflight.js            # Phase 0: verify Node ≥18, Intent app, asar
+    discovery.js            # Phase 1: discover 5 target files via fingerprints
+    symbols.js              # Phase 2: resolve minified symbols
+    patches.js              # Phase 3: build 18 PatchDef objects
+    engine.js               # Patch engine: checkPatchState, apply, brace-depth matching
+    verify.js               # Phase 4: syntax checks + structural invariants
+    install.js              # Phase 5: asar pack, backup, sudo install, codesign
+    cli.js                  # CLI orchestration, arg parsing, version tracking
+  patches/                  # Pre-built v0.2.11 patches (legacy mode)
+  docs/                     # Tài liệu
+```
+
+### State Directory
+
+`~/.intent-patch/` — persists across `npx` runs:
+- `.patched-version` — version tracking
+- `app.asar.backup` — backup asar gốc
+- `extracted/` — extracted app source
+- `app.asar` — repacked patched output
+
+### 18 Patches (5 files)
+
+| File | Patches | Vai trò |
 |------|---------|---------|
-| `patches/dist/features/agent/services/agent-factory.js` | Backend agent creation — tự suy provider từ model ID, align provider khi mismatch | 6A, 6B, 6C |
-| `patches/dist/renderer/app/immutable/chunks/BTPDcoPQ.js` | ModelStore — fetch models từ **all** providers bằng `Promise.allSettled`, group theo provider | 1–5 |
-| `patches/dist/renderer/app/immutable/chunks/CfKn743W.js` | ModelPicker UI — disable per-provider override, luôn dùng unified model list | 7A, 7B |
+| agent-factory.js | 6A, 6B, 6C | Backend: suy provider từ model ID, align provider |
+| agent-interaction-tools.js | 8A-import, 8A, 8B, 8C-1..4, 8D | Cross-provider delegation |
+| ModelStore chunk | 1–5 | Fetch models từ all providers, group by provider |
+| ModelPicker chunk | 7A, 7B | Disable per-provider override |
 
 ### Compound Model ID
 
-Format: `{providerId}:{modelId}` — ví dụ `codex:gpt-5.3-codex/high`, `claude-code:claude-opus-4.6`.
-Model không có prefix sẽ dùng default provider (auggie).
+Format: `{providerId}:{modelId}` — ví dụ `codex:gpt-5.3-codex/high`.
 
 ### Provider Inference (AgentFactory)
 
@@ -53,26 +70,18 @@ Safety-net: khi cross-provider mismatch, **align provider theo model** thay vì 
 ## Development Workflow
 
 ```
-1. Extract    npx asar extract app.asar.backup extracted
-2. Edit       Sửa file trong extracted/dist/...
-3. Verify     python3 verify.py
-4. Test       npx asar pack extracted app.asar && bash install.sh
-5. Archive    cp extracted/.../file patches/.../file  (3 files)
-6. Commit     git add patches/ && git commit
-```
-
-Auto-patch (version-independent):
-```
-1. Extract    npx asar extract app.asar.backup extracted
-2. Patch      bash apply.sh              # hoặc --no-install
-3. Verify     Tự động bởi autopatch.py
+1. Edit       Sửa file trong src/...
+2. Test       node autopatch.js --extracted-dir ./extracted --dry-run
+3. Verify     node autopatch.js --extracted-dir ./extracted --no-install
+4. Commit     git add src/ && git commit
 ```
 
 ## Caveats
 
-- **Unpacked files**: `BTPDcoPQ.js` và `CfKn743W.js` có flag `unpacked: true` trong asar header. Install phải cập nhật cả trong asar lẫn `app.asar.unpacked/`.
-- **Version lock**: Patches chỉ đúng cho Intent v0.2.11. Chunk filenames (`BTPDcoPQ`, `CfKn743W`) sẽ thay đổi khi Vite rebuild ở version mới.
-- **Minified code**: 2 frontend files đã minified — khi sửa cần map symbol thủ công (xem `docs/03-giải-mã-minified.md`).
+- **Unpacked files**: Chunk files có `unpacked: true` trong asar header. Install cập nhật cả trong asar lẫn `app.asar.unpacked/`.
+- **Minified code**: Frontend chunks đã minified — symbol resolution tự động qua `src/symbols.js`.
 - **Docs bằng tiếng Việt**: Toàn bộ `docs/` viết bằng tiếng Việt.
-- **`extracted/` không track**: Folder ~595 MB, nằm trong `.gitignore`. Chỉ `patches/` (~184 KB) được commit.
-- **Codesign**: Sau install cần codesign lại app trên macOS (`codesign --force --deep --sign -`).
+- **`extracted/` không track**: Folder ~595 MB, nằm trong `.gitignore`. Chỉ `patches/` được commit.
+- **Codesign**: Tự động sau install (`codesign --force --deep --sign -`).
+- **sudo**: Install phase cần sudo — script prompt password 1 lần.
+- **Security**: Tất cả sudo/external commands dùng `execFileSync` (argv arrays) thay vì shell strings để tránh injection. Xem `runCmdArgs` trong `src/utils.js`.
