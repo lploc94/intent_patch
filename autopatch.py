@@ -39,6 +39,7 @@ BACKUP_ASAR = os.path.join(SCRIPT_DIR, "app.asar.backup")
 DEFAULT_EXTRACTED = os.path.join(SCRIPT_DIR, "extracted")
 
 AGENT_FACTORY_REL = "dist/features/agent/services/agent-factory.js"
+AGENT_INTERACTION_TOOLS_REL = "dist/features/mcp/main/mcp/agent-interaction-tools.js"
 CHUNKS_DIR_REL = "dist/renderer/app/immutable/chunks"
 
 # Marker for patched loadModels cache key
@@ -72,6 +73,7 @@ class SymbolMap:
 class DiscoveredFiles:
     """Discovered file paths (relative to extracted dir)."""
     agent_factory: str = AGENT_FACTORY_REL
+    agent_interaction_tools: Optional[str] = AGENT_INTERACTION_TOOLS_REL
     provider_config: Optional[str] = None
     model_store: Optional[str] = None
     model_picker: Optional[str] = None
@@ -219,7 +221,7 @@ def preflight_checks(skip_install=False):
 # ─── Phase 1: File Discovery ───────────────────────────────────────────────────
 
 def discover_files(extracted_dir):
-    """Find the 4 target files using structural fingerprints."""
+    """Find the 5 target files using structural fingerprints."""
     print("\n=== Phase 1: File Discovery ===")
 
     files = DiscoveredFiles()
@@ -234,6 +236,14 @@ def discover_files(extracted_dir):
         log(f"agent-factory.js: {AGENT_FACTORY_REL}", "OK")
     else:
         fatal(f"agent-factory.js not found at {af_path}")
+
+    # 1.1b agent-interaction-tools.js — fixed path (optional)
+    ait_path = os.path.join(extracted_dir, AGENT_INTERACTION_TOOLS_REL)
+    if os.path.exists(ait_path):
+        log(f"agent-interaction-tools.js: {AGENT_INTERACTION_TOOLS_REL}", "OK")
+    else:
+        log("agent-interaction-tools.js not found — patches 8A-8D will be skipped", "WARN")
+        files.agent_interaction_tools = None
 
     # 1.2 Provider Config Chunk
     files.provider_config, files.provider_config_filename = _discover_provider_config(chunks_dir)
@@ -1085,6 +1095,253 @@ def build_patches(files, pc_symbols, ms_symbols, mp_symbols, extracted_dir):
         verify_absent=None,  # search_regex handles old-state detection
     ))
 
+    # ── Agent Interaction Tools Patches (8A-8D) ──
+    # File is non-minified — search/replace on original symbol names
+    # Only add these patches if the file was discovered (optional file)
+
+    if not files.agent_interaction_tools:
+        return patches
+
+    # Patch 8A: ACP_PROVIDERS import in agent-interaction-tools.js
+    patches.append(PatchDef(
+        name="Patch 8A-import: ACP_PROVIDERS import in agent-interaction-tools",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search="import { parseCompoundModelId, createCompoundModelId, getDefaultProviderId, getDefaultModelForProvider, isModelValidForProvider, PROVIDER_MODEL_TIERS, } from '../../../../shared/config/provider-config.js';",
+        replace="import { parseCompoundModelId, createCompoundModelId, getDefaultProviderId, getDefaultModelForProvider, isModelValidForProvider, PROVIDER_MODEL_TIERS, ACP_PROVIDERS, } from '../../../../shared/config/provider-config.js';",
+        verify_present="ACP_PROVIDERS, } from '../../../../shared/config/provider-config.js'",
+    ))
+
+    # Patch 8A: resolveModelForProvider — respect cross-provider specialist model
+    patches.append(PatchDef(
+        name="Patch 8A: resolveModelForProvider respects cross-provider specialist",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search=(
+            "        if (specialistProvider !== parentProvider) {\n"
+            "            logger.warn('Cross-provider specialist model without tier mapping, inheriting parent model', { specialistModel, specialistProvider, parentProvider, parentModel });\n"
+            "            return parentModel;\n"
+            "        }"
+        ),
+        replace=(
+            "        if (specialistProvider !== parentProvider) {\n"
+            "            if (ACP_PROVIDERS[specialistProvider]) {\n"
+            "                logger.info('Cross-provider specialist model with known provider, keeping specialist model', { specialistModel, specialistProvider, parentProvider });\n"
+            "                return specialistModel;\n"
+            "            }\n"
+            "            logger.warn('Cross-provider specialist model with unknown provider, inheriting parent model', { specialistModel, specialistProvider, parentProvider, parentModel });\n"
+            "            return parentModel;\n"
+            "        }"
+        ),
+        verify_present="Cross-provider specialist model with known provider, keeping specialist model",
+        verify_absent="Cross-provider specialist model without tier mapping, inheriting parent model",
+    ))
+
+    # Patch 8B: resolveSpecialistConfig — don't discard cross-provider model override
+    patches.append(PatchDef(
+        name="Patch 8B: resolveSpecialistConfig keeps cross-provider model override",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search=(
+            "        if (!isModelValidForProvider(validatedModelOverride, parentProvider)) {\n"
+            "            logger.warn('Model override belongs to a different provider, discarding', {\n"
+            "                modelOverride: validatedModelOverride,\n"
+            "                parentProvider,\n"
+            "            });\n"
+            "            validatedModelOverride = undefined;\n"
+            "        }"
+        ),
+        replace=(
+            "        if (!isModelValidForProvider(validatedModelOverride, parentProvider)) {\n"
+            "            const { providerId: overrideProvider } = parseCompoundModelId(validatedModelOverride);\n"
+            "            if (ACP_PROVIDERS[overrideProvider]) {\n"
+            "                logger.info('Model override uses different ACP provider, keeping — provider will be inferred from model', {\n"
+            "                    modelOverride: validatedModelOverride,\n"
+            "                    overrideProvider,\n"
+            "                    parentProvider,\n"
+            "                });\n"
+            "            }\n"
+            "            else {\n"
+            "                logger.warn('Model override uses unknown provider, discarding', {\n"
+            "                    modelOverride: validatedModelOverride,\n"
+            "                    parentProvider,\n"
+            "                });\n"
+            "                validatedModelOverride = undefined;\n"
+            "            }\n"
+            "        }"
+        ),
+        verify_present="Model override uses different ACP provider, keeping",
+        verify_absent="Model override belongs to a different provider, discarding",
+    ))
+
+    # Patch 8C: Infer provider from resolved model at createAgent calls
+    # There are 4 occurrences. We use statement_replace with regex to handle each.
+    # Pattern 1 & 2: parentProvider = ctx.model ? ... + provider: ctx.provider (with config.model)
+    patches.append(PatchDef(
+        name="Patch 8C-1: createAgent #1 infer provider from model",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search=(
+            "            // Extract parent provider so child agents inherit the correct provider\n"
+            "            const parentProvider = ctx.model ? parseCompoundModelId(ctx.model).providerId : undefined;\n"
+            "            const agent = await handler.createAgent(this.workspaceId, agentName, {\n"
+            "                workspacePath: this.workspacePath,\n"
+            "                model: config.model,\n"
+            "                provider: ctx.provider, // Inherit ACP provider from parent agent"
+        ),
+        replace=(
+            "            // Extract parent provider so child agents inherit the correct provider\n"
+            "            const resolvedProvider = (() => {\n"
+            "                const m = config.model;\n"
+            "                if (m && m.includes(':')) {\n"
+            "                    const { providerId } = parseCompoundModelId(m);\n"
+            "                    if (ACP_PROVIDERS[providerId]) return providerId;\n"
+            "                }\n"
+            "                return ctx.provider;\n"
+            "            })();\n"
+            "            const agent = await handler.createAgent(this.workspaceId, agentName, {\n"
+            "                workspacePath: this.workspacePath,\n"
+            "                model: config.model,\n"
+            "                provider: resolvedProvider, // Infer provider from resolved model, fallback to parent"
+        ),
+        verify_present="})();\n            const agent = await handler.createAgent(this.workspaceId, agentName, {\n                workspacePath: this.workspacePath,\n                model: config.model,\n                provider: resolvedProvider",
+        verify_absent="const parentProvider = ctx.model ? parseCompoundModelId(ctx.model).providerId : undefined;\n            const agent = await handler.createAgent(this.workspaceId, agentName, {\n                workspacePath: this.workspacePath,\n                model: config.model,\n                provider: ctx.provider",
+    ))
+
+    patches.append(PatchDef(
+        name="Patch 8C-2: createAgent #2 infer provider from model",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search=(
+            "            // Extract parent provider so child agents inherit the correct provider\n"
+            "            const parentProvider = ctx.model ? parseCompoundModelId(ctx.model).providerId : undefined;\n"
+            "            const agent = await handler.createAgent(this.workspaceId, agentName, // Use truncated task text as agent name\n"
+            "            {\n"
+            "                workspacePath: this.workspacePath,\n"
+            "                model: config.model,\n"
+            "                provider: ctx.provider, // Inherit ACP provider from parent agent"
+        ),
+        replace=(
+            "            // Extract parent provider so child agents inherit the correct provider\n"
+            "            const resolvedProvider = (() => {\n"
+            "                const m = config.model;\n"
+            "                if (m && m.includes(':')) {\n"
+            "                    const { providerId } = parseCompoundModelId(m);\n"
+            "                    if (ACP_PROVIDERS[providerId]) return providerId;\n"
+            "                }\n"
+            "                return ctx.provider;\n"
+            "            })();\n"
+            "            const agent = await handler.createAgent(this.workspaceId, agentName, // Use truncated task text as agent name\n"
+            "            {\n"
+            "                workspacePath: this.workspacePath,\n"
+            "                model: config.model,\n"
+            "                provider: resolvedProvider, // Infer provider from resolved model, fallback to parent"
+        ),
+        verify_present="})();\n            const agent = await handler.createAgent(this.workspaceId, agentName, // Use truncated task text as agent name\n            {\n                workspacePath: this.workspacePath,\n                model: config.model,\n                provider: resolvedProvider",
+        verify_absent="const parentProvider = ctx.model ? parseCompoundModelId(ctx.model).providerId : undefined;\n            const agent = await handler.createAgent(this.workspaceId, agentName, // Use truncated task text",
+    ))
+
+    patches.append(PatchDef(
+        name="Patch 8C-3: createAgent #3 infer provider from model",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search=(
+            "        // Extract provider from the model so child agents inherit the correct provider\n"
+            "        const inferredProvider = model ? parseCompoundModelId(model).providerId : undefined;\n"
+            "        const agent = await handler.createAgent(this.workspaceId, agentName, {\n"
+            "            workspacePath: this.workspacePath,\n"
+            "            model,\n"
+            "            provider: ctx.provider, // Inherit ACP provider from parent agent"
+        ),
+        replace=(
+            "        // Extract provider from the model so child agents inherit the correct provider\n"
+            "        const resolvedProvider = (() => {\n"
+            "            if (model && model.includes(':')) {\n"
+            "                const { providerId } = parseCompoundModelId(model);\n"
+            "                if (ACP_PROVIDERS[providerId]) return providerId;\n"
+            "            }\n"
+            "            return ctx.provider;\n"
+            "        })();\n"
+            "        const agent = await handler.createAgent(this.workspaceId, agentName, {\n"
+            "            workspacePath: this.workspacePath,\n"
+            "            model,\n"
+            "            provider: resolvedProvider, // Infer provider from resolved model, fallback to parent"
+        ),
+        verify_present="const resolvedProvider = (() => {\n            if (model && model.includes",
+        verify_absent="const inferredProvider = model ? parseCompoundModelId(model).providerId : undefined",
+    ))
+
+    patches.append(PatchDef(
+        name="Patch 8C-4: createAgent #4 (wake_or_create) infer provider from model",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search=(
+            "            // Extract parent provider so child agents inherit the correct provider\n"
+            "            const parentProvider = ctx.model ? parseCompoundModelId(ctx.model).providerId : undefined;\n"
+            "            const newAgent = await handler.createAgent(this.workspaceId, agentName, {\n"
+            "                workspacePath: this.workspacePath,\n"
+            "                model,\n"
+            "                provider: ctx.provider, // Inherit ACP provider from parent agent"
+        ),
+        replace=(
+            "            // Extract parent provider so child agents inherit the correct provider\n"
+            "            const resolvedProvider = (() => {\n"
+            "                if (model && model.includes(':')) {\n"
+            "                    const { providerId } = parseCompoundModelId(model);\n"
+            "                    if (ACP_PROVIDERS[providerId]) return providerId;\n"
+            "                }\n"
+            "                return ctx.provider;\n"
+            "            })();\n"
+            "            const newAgent = await handler.createAgent(this.workspaceId, agentName, {\n"
+            "                workspacePath: this.workspacePath,\n"
+            "                model,\n"
+            "                provider: resolvedProvider, // Infer provider from resolved model, fallback to parent"
+        ),
+        verify_present="const resolvedProvider = (() => {\n                if (model && model.includes(':')) {\n                    const { providerId } = parseCompoundModelId(model);\n                    if (ACP_PROVIDERS[providerId]) return providerId;\n                }\n                return ctx.provider;\n            })();\n            const newAgent",
+        verify_absent="const parentProvider = ctx.model ? parseCompoundModelId(ctx.model).providerId : undefined;\n            const newAgent",
+    ))
+
+    # Patch 8D: WakeOrCreateTaskAgentTool — allow cross-provider model
+    patches.append(PatchDef(
+        name="Patch 8D: wake_or_create_task_agent allows cross-provider model",
+        file_key="agent_interaction_tools",
+        patch_type="text_replace",
+        search=(
+            "            if (model && ctx.provider) {\n"
+            "                if (!isModelValidForProvider(model, ctx.provider)) {\n"
+            "                    logger.warn('wake_or_create_task_agent: model belongs to different provider, discarding', {\n"
+            "                        model,\n"
+            "                        parentProvider: ctx.provider,\n"
+            "                    });\n"
+            "                    model = undefined;\n"
+            "                }\n"
+            "            }"
+        ),
+        replace=(
+            "            if (model && ctx.provider) {\n"
+            "                if (!isModelValidForProvider(model, ctx.provider)) {\n"
+            "                    const { providerId: modelProvider } = parseCompoundModelId(model);\n"
+            "                    if (ACP_PROVIDERS[modelProvider]) {\n"
+            "                        logger.info('wake_or_create_task_agent: model uses different ACP provider, keeping', {\n"
+            "                            model,\n"
+            "                            modelProvider,\n"
+            "                            parentProvider: ctx.provider,\n"
+            "                        });\n"
+            "                    }\n"
+            "                    else {\n"
+            "                        logger.warn('wake_or_create_task_agent: model uses unknown provider, discarding', {\n"
+            "                            model,\n"
+            "                            parentProvider: ctx.provider,\n"
+            "                        });\n"
+            "                        model = undefined;\n"
+            "                    }\n"
+            "                }\n"
+            "            }"
+        ),
+        verify_present="wake_or_create_task_agent: model uses different ACP provider, keeping",
+        verify_absent="wake_or_create_task_agent: model belongs to different provider, discarding",
+    ))
+
     return patches
 
 
@@ -1428,6 +1685,8 @@ def apply_patches(patches, extracted_dir, files, dry_run=False):
         "model_store": os.path.join(extracted_dir, files.model_store),
         "model_picker": os.path.join(extracted_dir, files.model_picker),
     }
+    if files.agent_interaction_tools:
+        file_map["agent_interaction_tools"] = os.path.join(extracted_dir, files.agent_interaction_tools)
 
     all_ok = True
 
@@ -1478,6 +1737,8 @@ def verify_patches(patches, extracted_dir, files):
         "model_store": os.path.join(extracted_dir, files.model_store),
         "model_picker": os.path.join(extracted_dir, files.model_picker),
     }
+    if files.agent_interaction_tools:
+        file_map["agent_interaction_tools"] = os.path.join(extracted_dir, files.agent_interaction_tools)
 
     passed = 0
     failed = 0
@@ -1558,6 +1819,36 @@ def verify_patches(patches, extracted_dir, files):
         log("AgentFactory: safety-net missing align logic", "FAIL")
         failed += 1
         errors.append("Structural: safety-net align")
+
+    # AgentInteractionTools: structural checks (only if file was discovered)
+    if files.agent_interaction_tools:
+        ait_content = read_file(file_map["agent_interaction_tools"])
+        if "ACP_PROVIDERS, } from '../../../../shared/config/provider-config.js'" in ait_content:
+            log("AgentInteractionTools: ACP_PROVIDERS import present", "OK")
+            passed += 1
+        else:
+            log("AgentInteractionTools: ACP_PROVIDERS import missing", "FAIL")
+            failed += 1
+            errors.append("Structural: ACP_PROVIDERS import")
+
+        # AgentInteractionTools: resolvedProvider used in createAgent calls
+        resolved_provider_count = ait_content.count("provider: resolvedProvider")
+        if resolved_provider_count >= 4:
+            log(f"AgentInteractionTools: resolvedProvider in {resolved_provider_count} createAgent calls", "OK")
+            passed += 1
+        else:
+            log(f"AgentInteractionTools: resolvedProvider only in {resolved_provider_count}/4 createAgent calls", "FAIL")
+            failed += 1
+            errors.append("Structural: resolvedProvider createAgent calls")
+
+        # AgentInteractionTools: no remaining 'provider: ctx.provider' in createAgent calls
+        if "provider: ctx.provider, // Inherit ACP provider" not in ait_content:
+            log("AgentInteractionTools: no legacy ctx.provider in createAgent calls", "OK")
+            passed += 1
+        else:
+            log("AgentInteractionTools: legacy ctx.provider still present in createAgent", "FAIL")
+            failed += 1
+            errors.append("Structural: legacy ctx.provider")
 
     print(f"\n  Results: {passed} passed, {failed} failed")
 
@@ -1795,6 +2086,7 @@ def main():
         print(f"  ModelStore:      {files.model_store}")
         print(f"  ModelPicker:     {files.model_picker}")
         print(f"  Agent Factory:   {files.agent_factory}")
+        print(f"  Agent Interact:  {files.agent_interaction_tools or '(not found — patches 8A-8D skipped)'}")
         print("\n  Provider Config Exports:")
         for name, alias in pc_symbols.provider_exports.items():
             print(f"    {name} → '{alias}'")

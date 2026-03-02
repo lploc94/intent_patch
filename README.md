@@ -38,6 +38,9 @@ npx asar extract app.asar.backup extracted
 
 # Auto-patch: discover files, apply patches, verify, repack, install (cần sudo)
 bash apply.sh
+
+# Codesign lại app (bắt buộc trên macOS)
+codesign --force --deep --sign - "/Applications/Intent by Augment.app"
 ```
 
 `apply.sh` mặc định chạy `autopatch.py` — tự động discover đúng chunk files, apply patches, verify, repack và install. Hoạt động với nhiều version Intent, không bị ràng buộc tên file cố định.
@@ -54,6 +57,9 @@ npx asar extract app.asar.backup extracted
 
 # Legacy: copy pre-built patches (v0.2.11 only)
 bash apply.sh --legacy
+
+# Codesign lại app (bắt buộc trên macOS)
+codesign --force --deep --sign - "/Applications/Intent by Augment.app"
 ```
 
 ### Cách 3: Từng bước thủ công
@@ -82,6 +88,9 @@ npx asar pack extracted app.asar
 
 # 5. Install (cần sudo)
 bash install.sh
+
+# 6. Codesign lại app (bắt buộc trên macOS)
+codesign --force --deep --sign - "/Applications/Intent by Augment.app"
 ```
 
 ### Xác nhận sau cài đặt
