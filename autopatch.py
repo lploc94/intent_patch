@@ -1712,8 +1712,46 @@ def main():
     # Phase 0: Preflight
     preflight_checks(skip_install=skip_install)
 
-    # Extract if needed
-    if not args.extracted_dir and not os.path.isdir(extracted_dir):
+    # Extract if needed — also re-extract if backup version differs from extracted
+    need_extract = not os.path.isdir(extracted_dir)
+    if not need_extract and not args.extracted_dir:
+        # Detect stale extracted/ from a different Intent version
+        extracted_pkg = os.path.join(extracted_dir, "package.json")
+        if os.path.exists(extracted_pkg) and os.path.exists(BACKUP_ASAR):
+            import json as _json
+            try:
+                with open(extracted_pkg, encoding="utf-8") as f:
+                    extracted_ver = _json.load(f).get("version", "")
+            except (OSError, ValueError) as e:
+                log(f"Cannot read extracted version ({e}), forcing re-extract", "WARN")
+                shutil.rmtree(extracted_dir)
+                need_extract = True
+                extracted_ver = None
+
+            if extracted_ver is not None:
+                # asar extract-file writes to cwd; use a tempdir
+                import tempfile
+                backup_ver = ""
+                try:
+                    with tempfile.TemporaryDirectory() as tmpd:
+                        run_cmd(
+                            f'npx --yes asar extract-file "{BACKUP_ASAR}" package.json',
+                            check=True, timeout=30, cwd=tmpd
+                        )
+                        with open(os.path.join(tmpd, "package.json"), encoding="utf-8") as f:
+                            backup_ver = _json.load(f).get("version", "")
+                except (OSError, ValueError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+                    log(f"Cannot read backup version ({e}), forcing re-extract", "WARN")
+                    shutil.rmtree(extracted_dir)
+                    need_extract = True
+
+                if not need_extract and extracted_ver != backup_ver:
+                    log(f"Stale extracted/ detected: v{extracted_ver} vs backup v{backup_ver}", "WARN")
+                    log("Removing stale extracted/ and re-extracting...")
+                    shutil.rmtree(extracted_dir)
+                    need_extract = True
+
+    if not args.extracted_dir and need_extract:
         print("\n=== Extracting app.asar ===")
         source_asar = BACKUP_ASAR if os.path.exists(BACKUP_ASAR) else INTENT_ASAR
         if not os.path.exists(source_asar):
@@ -1788,10 +1826,7 @@ def main():
         fatal("Verification failed. Patches may be incomplete.")
 
     # Phase 5: Repack & Install
-    if not args.no_install:
-        repack_and_install(extracted_dir, files, skip_install=skip_install)
-    else:
-        log("Patches applied and verified. Use --no-install was set, skipping install.", "OK")
+    repack_and_install(extracted_dir, files, skip_install=args.no_install)
 
 
 if __name__ == "__main__":
