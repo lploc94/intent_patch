@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { log, fatal, readFile, writeFile } = require('./utils');
+const { log, fatal, readFile, writeFile, header } = require('./utils');
 const { PatchState } = require('./constants');
 
 function checkPatchState(patch, content) {
@@ -183,7 +183,7 @@ function applyFunctionReplace(patch, content, dryRun = false) {
 }
 
 function applyPatches(patches, extractedDir, files, dryRun = false) {
-  console.log('\n=== Phase 3: Patch Application ===');
+  header('Phase 3: Patch Application');
 
   // Group patches by file
   const filePatchesMap = {};

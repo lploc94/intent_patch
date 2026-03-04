@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { log, fatal, readFile, writeFile, runCmd, runCmdArgs } = require('./utils');
+const { log, fatal, readFile, writeFile, runCmd, runCmdArgs, header, startSpinner } = require('./utils');
 const {
   INTENT_APP, INTENT_ASAR, INTENT_UNPACKED, INTENT_PLIST,
   STATE_DIR, BACKUP_ASAR, BACKUP_UNPACKED, DEFAULT_EXTRACTED, OUTPUT_ASAR,
@@ -16,7 +16,7 @@ function getAsarApi() {
 }
 
 async function extractApp(extractedDir, asarMode) {
-  console.log('\n=== Extracting app.asar ===');
+  header('Extracting app.asar');
 
   // Choose source: backup if exists, app original if not
   const sourceAsar = fs.existsSync(BACKUP_ASAR) ? BACKUP_ASAR : INTENT_ASAR;
@@ -75,13 +75,14 @@ async function extractApp(extractedDir, asarMode) {
   }
 
   try {
+    const spinner = startSpinner('Extracting...');
     const asar = getAsarApi();
     if (asar && asarMode === 'library') {
       asar.extractAll(sourceAsar, extractedDir);
     } else {
       runCmdArgs(['npx', '--yes', 'asar', 'extract', sourceAsar, extractedDir], { timeout: 300000 });
     }
-    log('Extraction complete', 'OK');
+    spinner.stop('OK');
   } catch (e) {
     fatal(`asar extract failed: ${e.message}`);
   } finally {
@@ -92,10 +93,10 @@ async function extractApp(extractedDir, asarMode) {
 }
 
 async function repackAndInstall(extractedDir, files, skipInstall, asarMode) {
-  console.log('\n=== Phase 5: Repack & Install ===');
+  header('Phase 5: Repack & Install');
 
   // 5.1 Repack
-  log('Repacking asar...');
+  const spinner = startSpinner('Repacking asar...');
   try {
     const asar = getAsarApi();
     if (asar && asarMode === 'library') {
@@ -103,8 +104,9 @@ async function repackAndInstall(extractedDir, files, skipInstall, asarMode) {
     } else {
       runCmdArgs(['npx', '--yes', 'asar', 'pack', extractedDir, OUTPUT_ASAR], { timeout: 300000 });
     }
-    log(`Repacked to ${OUTPUT_ASAR}`, 'OK');
+    spinner.stop('OK');
   } catch (e) {
+    spinner.stop('FAIL');
     fatal(`asar pack failed: ${e.message}`);
   }
 

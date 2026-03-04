@@ -87,18 +87,18 @@ function buildPatches(files, pcSymbols, msSymbols, mpSymbols, extractedDir) {
     patch_type: 'text_replace',
     search: (
       'let provider = config.provider;\n'
-      + '                        if (!provider && !isBackend) {'
+      + '            if (!provider && !isBackend) {'
     ),
     replace: (
       'let provider = config.provider;\n'
-      + '                        if (!provider && config.model) {\n'
-      + '                            const { providerId } = parseCompoundModelId(config.model);\n'
-      + '                            if (ACP_PROVIDERS[providerId]) {\n'
-      + "                                provider = providerId;\n"
-      + "                                logger.debug('Derived provider from model ID', { model: config.model, provider });\n"
-      + '                            }\n'
-      + '                        }\n'
-      + '                        if (!provider && !isBackend) {'
+      + '            if (!provider && config.model) {\n'
+      + '                const { providerId } = parseCompoundModelId(config.model);\n'
+      + '                if (ACP_PROVIDERS[providerId]) {\n'
+      + "                    provider = providerId;\n"
+      + "                    logger.debug('Derived provider from model ID', { model: config.model, provider });\n"
+      + '                }\n'
+      + '            }\n'
+      + '            if (!provider && !isBackend) {'
     ),
     verify_present: "if (!provider && config.model) {\n                const { providerId } = parseCompoundModelId(config.model);",
     verify_absent: "if (!provider && config.model && config.model.includes(':'))",
