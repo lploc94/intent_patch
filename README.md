@@ -2,6 +2,8 @@
 
 Patch cho [Intent by Augment](https://augmentcode.com/) cho phép sử dụng nhiều ACP providers đồng thời. Thay vì chỉ hiện models của provider đang active, dropdown sẽ hiện models của **tất cả** providers đã cài đặt, và tự động chọn đúng provider khi tạo agent.
 
+**Hỗ trợ**: Intent v0.2.11 (legacy) · v0.2.12–v0.2.18 (auto-patch)
+
 ## Vấn đề gốc
 
 Intent chỉ cho phép chọn 1 ACP provider tại 1 thời điểm. Model dropdown chỉ hiện models của provider đang active. Không thể dùng Claude Code (opus) làm implementor và Codex CLI làm verifier cùng lúc.
@@ -25,6 +27,13 @@ Auto-patch 5 files trong app.asar bằng version-independent symbol resolution:
 - Intent by Augment đã cài tại `/Applications/Intent by Augment.app`
 - Node.js >= 18
 - Quyền sudo
+
+### Tương thích
+
+| Intent version | Phương thức |
+|---------------|------------|
+| v0.2.11 | `--legacy` (pre-built patches) |
+| v0.2.12–v0.2.18 | Auto-patch (symbol resolution) |
 
 ### Cách 1: One-liner (recommended)
 
@@ -105,7 +114,7 @@ Thư mục `docs/` chứa hướng dẫn đầy đủ từ đầu đến cuối:
 5. [Thực thi patch](docs/05-thực-thi-patch.md)
 6. [Đóng gói cài đặt](docs/06-đóng-gói-cài-đặt.md)
 
-Xem thêm [PATCHES.md](PATCHES.md) để tra cứu nhanh từng patch và symbol map.
+Xem thêm [PATCHES.md](PATCHES.md) để tra cứu nhanh từng patch và symbol map. Xem [CHANGELOG.md](CHANGELOG.md) để theo dõi các thay đổi qua từng phiên bản.
 
 ## Phát triển
 

@@ -107,9 +107,9 @@ function buildPatches(files, pcSymbols, msSymbols, mpSymbols, extractedDir) {
   patches.push({
     name: 'Patch 6C: safety-net align provider',
     file_key: 'agent_factory',
-    patch_type: 'text_replace',
-    search: _build6cSearch(),
-    replace: _build6cReplace(),
+    patch_type: 'statement_replace',
+    search_regex: _build6cSearch(),
+    replace_template: _build6cReplace(),
     verify_present: 'Safety net: aligning provider to match compound model',
     verify_absent: 'Safety net: cross-provider model mismatch in agent creation',
   });
@@ -484,7 +484,7 @@ function _buildGetGroupedModelsBody(parseFn, acp) {
 }
 
 function _build6cSearch() {
-  return (
+  const before =
     "if (resolvedModel && provider && resolvedModel.includes(':')) {\n"
     + "                if (!isModelValidForProvider(resolvedModel, provider)) {\n"
     + "                    const { providerId: modelProvider } = parseCompoundModelId(resolvedModel);\n"
@@ -496,15 +496,16 @@ function _build6cSearch() {
     + "                    if (provider in PROVIDER_MODEL_TIERS) {\n"
     + "                        const baseModel = getDefaultModelForProvider(provider, 'balanced');\n"
     + "                        const defaultProviderId = getDefaultProviderId();\n"
-    + "                        resolvedModel =\n"
-    + "                            provider !== defaultProviderId ? `${provider}:${baseModel}` : baseModel;\n"
+    + "                        resolvedModel =";
+  const after =
+    "provider !== defaultProviderId ? `${provider}:${baseModel}` : baseModel;\n"
     + "                        logger.debug('Re-resolved model to provider default', { resolvedModel });\n"
     + "                    }\n"
     + "                    // If provider has no tier mappings (e.g., opencode), keep resolvedModel as-is.\n"
     + "                    // We cannot safely guess a model for dynamic-model providers.\n"
     + "                }\n"
-    + "            }"
-  );
+    + "            }";
+  return escapeRegExp(before) + '\\s+' + escapeRegExp(after);
 }
 
 function _build6cReplace() {
