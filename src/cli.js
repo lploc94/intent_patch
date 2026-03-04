@@ -3,11 +3,11 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  STATE_DIR, INTENT_APP, INTENT_PLIST, VERSION_FILE,
+  STATE_DIR, INTENT_APP, INTENT_ASAR, INTENT_PLIST, VERSION_FILE,
   DEFAULT_EXTRACTED, BACKUP_ASAR, BACKUP_UNPACKED, OUTPUT_ASAR,
   CHUNKS_DIR_REL,
 } = require('./constants');
-const { log, fatal, readFile, writeFile, runCmd, runCmdArgs } = require('./utils');
+const { log, fatal, readFile, writeFile, runCmd, runCmdArgs, c, header, banner } = require('./utils');
 const { preflightChecks } = require('./preflight');
 const { discoverFiles } = require('./discovery');
 const { resolveSymbols } = require('./symbols');
@@ -24,6 +24,7 @@ function parseArgs(argv) {
     noInstall: false,
     legacy: false,
     status: false,
+    rollback: false,
   };
 
   const rest = argv.slice(2);
@@ -44,6 +45,8 @@ function parseArgs(argv) {
       args.legacy = true;
     } else if (arg === '--status') {
       args.status = true;
+    } else if (arg === '--rollback') {
+      args.rollback = true;
     } else if (arg === '--help' || arg === '-h') {
       console.log(`Usage: intent-patch [options]
 
@@ -54,6 +57,7 @@ Options:
   --no-install            Patch and verify but don't install
   --legacy                Legacy mode: copy pre-built patches (v0.2.11 only)
   --status                Print patch status and exit
+  --rollback              Restore original unpatched app.asar from backup
   --help, -h              Show this help`);
       process.exit(0);
     } else if (arg.startsWith('-')) {
@@ -83,26 +87,106 @@ function savePatchedVersion(version) {
   writeFile(VERSION_FILE, version + '\n');
 }
 
+async function handleRollback() {
+  banner('Intent Multi-Provider Auto-Patcher — Rollback');
+
+  // Check backup exists
+  if (!fs.existsSync(BACKUP_ASAR)) {
+    fatal('No backup found at ' + BACKUP_ASAR + '\nCannot rollback. Backup is created during the first install.');
+  }
+  log('Backup found: ' + BACKUP_ASAR, 'OK');
+
+  // Check if already unpatched
+  const patchedVersion = getPatchedVersion();
+  if (!patchedVersion) {
+    log('No .patched-version found — may already be at original state', 'WARN');
+  }
+
+  // Check Intent app exists
+  if (!fs.existsSync(INTENT_APP)) {
+    fatal('Intent app not found at ' + INTENT_APP);
+  }
+
+  // Prompt sudo early
+  log('Requesting sudo access...');
+  if (process.stdin.isTTY) {
+    runCmdArgs(['sudo', '-v'], { interactive: true, check: false });
+  }
+
+  // Kill Intent
+  log('Killing Intent by Augment...');
+  runCmdArgs(['pkill', '-f', 'Intent by Augment'], { check: false });
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // Restore backup asar
+  log('Restoring original app.asar...');
+  try {
+    runCmdArgs(['sudo', 'cp', BACKUP_ASAR, INTENT_ASAR]);
+    log('app.asar restored', 'OK');
+  } catch (e) {
+    fatal('Failed to restore app.asar: ' + e.message);
+  }
+
+  // Restore unpacked if backup symlink exists
+  if (fs.existsSync(BACKUP_UNPACKED)) {
+    try {
+      const target = fs.readlinkSync(BACKUP_UNPACKED);
+      // The unpacked dir in the app should already be the original
+      // (backup.unpacked is a symlink to the original INTENT_UNPACKED)
+      log('Unpacked files intact (symlink to original)', 'OK');
+    } catch {
+      log('Could not read backup unpacked symlink', 'WARN');
+    }
+  }
+
+  // Remove xattr
+  log('Removing macOS protection flags...');
+  runCmdArgs(['sudo', 'xattr', '-cr', INTENT_APP], { check: false });
+
+  // Remove ElectronAsarIntegrity
+  log('Removing ElectronAsarIntegrity...');
+  runCmdArgs(['sudo', '/usr/libexec/PlistBuddy', '-c', 'Delete :ElectronAsarIntegrity', INTENT_PLIST], { check: false });
+
+  // Re-sign
+  log('Re-signing app...');
+  try {
+    runCmdArgs(['sudo', 'codesign', '--force', '--deep', '--sign', '-', INTENT_APP]);
+    log('App re-signed', 'OK');
+  } catch (e) {
+    log('Codesign failed: ' + e.message, 'FAIL');
+  }
+
+  // Clear patch state
+  if (fs.existsSync(VERSION_FILE)) {
+    try {
+      fs.unlinkSync(VERSION_FILE);
+      log('Cleared patch state', 'OK');
+    } catch { /* ignore */ }
+  }
+
+  log('Rollback complete. Intent restored to original state.', 'OK');
+}
+
 function handleStatus() {
   const appVersion = getAppVersion();
   const patchedVersion = getPatchedVersion();
 
   if (!appVersion) {
-    console.log('[intent-patch] Intent not found');
+    console.log(`[intent-patch] ${c.red}Intent not found${c.reset}`);
     process.exit(1);
   } else if (appVersion === patchedVersion) {
-    console.log(`[intent-patch] v${appVersion} \u2014 patched \u2713`);
+    console.log(`[intent-patch] v${appVersion} \u2014 ${c.green}patched \u2713${c.reset}`);
   } else if (!patchedVersion) {
-    console.log(`[intent-patch] v${appVersion} \u2014 not patched! Run: npx github:lploc94/intent_patch`);
+    console.log(`[intent-patch] v${appVersion} \u2014 ${c.yellow}not patched!${c.reset} Run: npx github:lploc94/intent_patch`);
   } else {
-    console.log(`[intent-patch] v${appVersion} \u2014 update detected (was v${patchedVersion})! Run: npx github:lploc94/intent_patch`);
+    console.log(`[intent-patch] v${appVersion} \u2014 ${c.yellow}update detected${c.reset} (was v${patchedVersion})! Run: npx github:lploc94/intent_patch`);
   }
   process.exit(0);
 }
 
 async function handleLegacy(args) {
-  console.log('=== Legacy Mode (pre-built patches) ===');
-  console.log('Warning: Legacy mode only works for Intent v0.2.11');
+  header('Legacy Mode (pre-built patches)');
+  console.log(`  ${c.yellow}Warning: Legacy mode only works for Intent v0.2.11${c.reset}`);
   console.log('');
 
   const patchesDir = path.join(__dirname, '..', 'patches');
@@ -113,7 +197,7 @@ async function handleLegacy(args) {
   }
 
   // Copy patched files
-  console.log('=== Step 1: Copy patched files ===');
+  header('Step 1: Copy patched files');
   const filesToCopy = [
     'dist/features/agent/services/agent-factory.js',
     'dist/renderer/app/immutable/chunks/BTPDcoPQ.js',
@@ -139,7 +223,7 @@ async function handleLegacy(args) {
   console.log('  OK  patched-files.json written');
 
   // Verify (hardcoded v0.2.11 checks)
-  console.log('\n=== Step 2: Verify ===');
+  header('Step 2: Verify');
   const checks = [
     { rel: 'dist/features/agent/services/agent-factory.js', desc: 'Patch 6A: ACP_PROVIDERS import',
       must_contain: 'import { ACP_PROVIDERS, getDefaultModelForProvider' },
@@ -253,15 +337,19 @@ async function main() {
     return;
   }
 
+  // --rollback: restore original app
+  if (args.rollback) {
+    await handleRollback();
+    return;
+  }
+
   // --legacy: legacy mode
   if (args.legacy) {
     await handleLegacy(args);
     return;
   }
 
-  console.log('='.repeat(60));
-  console.log('  Intent Multi-Provider Auto-Patcher');
-  console.log('='.repeat(60));
+  banner('Intent Multi-Provider Auto-Patcher');
 
   const skipInstall = args.noInstall || args.dryRun || args.discoverOnly;
   const extractedDir = args.extractedDir || DEFAULT_EXTRACTED;
@@ -271,16 +359,16 @@ async function main() {
   const patchedVersion = getPatchedVersion();
 
   if (appVersion) {
-    console.log(`  App version:     ${appVersion}`);
-    console.log(`  Patched version: ${patchedVersion || 'none'}`);
+    console.log(`  App version:     ${c.cyan}${appVersion}${c.reset}`);
+    console.log(`  Patched version: ${patchedVersion ? c.green + patchedVersion + c.reset : c.dim + 'none' + c.reset}`);
 
     if (appVersion === patchedVersion) {
-      console.log(`  Mode: Repair (re-patch v${appVersion})`);
+      console.log(`  Mode: ${c.yellow}Repair${c.reset} (re-patch v${appVersion})`);
     } else {
       if (patchedVersion) {
-        console.log(`  ! Version changed: v${patchedVersion} \u2192 v${appVersion}`);
+        console.log(`  ${c.yellow}!${c.reset} Version changed: v${patchedVersion} \u2192 v${appVersion}`);
       }
-      console.log('  Mode: Install');
+      console.log(`  Mode: ${c.green}Install${c.reset}`);
       // Clean stale artifacts
       if (!args.extractedDir) {
         for (const p of [DEFAULT_EXTRACTED, BACKUP_ASAR, BACKUP_UNPACKED, OUTPUT_ASAR]) {
@@ -319,7 +407,7 @@ async function main() {
   const { pcSymbols, msSymbols, mpSymbols } = resolveSymbols(extractedDir, files);
 
   if (args.discoverOnly) {
-    console.log('\n=== Discovery Complete ===');
+    header('Discovery Complete');
     console.log(`  Provider Config: ${files.provider_config}`);
     console.log(`  ModelStore:      ${files.model_store}`);
     console.log(`  ModelPicker:     ${files.model_picker}`);
@@ -349,7 +437,7 @@ async function main() {
   }
 
   if (args.dryRun) {
-    console.log('\n=== Dry Run Complete ===');
+    header('Dry Run Complete');
     console.log('  No files were modified.');
     return;
   }
@@ -368,7 +456,7 @@ async function main() {
   // Save patched version
   if (!args.noInstall && appVersion) {
     savePatchedVersion(appVersion);
-    console.log(`\n  \u2713 Patched v${appVersion}`);
+    console.log(`\n  ${c.green}✓${c.reset} Patched v${appVersion}`);
   }
 }
 

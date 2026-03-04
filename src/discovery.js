@@ -2,11 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const { log, fatal, readFile } = require('./utils');
+const { log, fatal, readFile, header } = require('./utils');
 const { AGENT_FACTORY_REL, AGENT_INTERACTION_TOOLS_REL, CHUNKS_DIR_REL } = require('./constants');
 
 function discoverFiles(extractedDir) {
-  console.log('\n=== Phase 1: File Discovery ===');
+  header('Phase 1: File Discovery');
 
   const files = {
     agent_factory: AGENT_FACTORY_REL,

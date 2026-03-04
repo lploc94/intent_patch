@@ -1,10 +1,10 @@
 'use strict';
 
 const path = require('path');
-const { log, fatal, readFile, escapeRegExp } = require('./utils');
+const { log, fatal, readFile, escapeRegExp, header } = require('./utils');
 
 function resolveSymbols(extractedDir, files) {
-  console.log('\n=== Phase 2: Symbol Resolution ===');
+  header('Phase 2: Symbol Resolution');
 
   const pcSymbols = resolveProviderConfig(extractedDir, files);
   const msSymbols = resolveModelStore(extractedDir, files, pcSymbols);

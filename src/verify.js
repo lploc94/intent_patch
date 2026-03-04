@@ -1,10 +1,10 @@
 'use strict';
 
 const path = require('path');
-const { log, readFile, runCmd } = require('./utils');
+const { log, readFile, runCmd, header, c } = require('./utils');
 
 function verifyPatches(patches, extractedDir, files) {
-  console.log('\n=== Phase 4: Verification ===');
+  header('Phase 4: Verification');
 
   const fileMap = {
     agent_factory: path.join(extractedDir, files.agent_factory),
@@ -130,12 +130,12 @@ function verifyPatches(patches, extractedDir, files) {
     }
   }
 
-  console.log(`\n  Results: ${passed} passed, ${failed} failed`);
+  console.log(`\n  Results: ${c.green}${passed} passed${c.reset}, ${failed > 0 ? c.red + failed + ' failed' + c.reset : '0 failed'}`);
 
   if (failed > 0) {
     console.log('  Failed checks:');
     for (const e of errors) {
-      console.log(`    - ${e}`);
+      console.log(`    ${c.red}-${c.reset} ${e}`);
     }
     return false;
   }

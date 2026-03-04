@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const { execSync } = require('child_process');
-const { log, fatal, runCmd } = require('./utils');
+const { log, fatal, runCmd, header } = require('./utils');
 const { INTENT_APP, INTENT_ASAR } = require('./constants');
 
 function which(cmd) {
@@ -33,7 +33,7 @@ function checkAsarApi() {
 }
 
 function preflightChecks(skipInstall = false) {
-  console.log('\n=== Phase 0: Preflight Checks ===');
+  header('Phase 0: Preflight Checks');
   let ok = true;
 
   // Node.js version
