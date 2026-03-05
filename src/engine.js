@@ -24,8 +24,12 @@ function checkPatchState(patch, content) {
     hasOld = true;
   }
   // search_alt: only consider "old" if new is NOT present (upgrade scenario)
-  if (!hasOld && !hasNew && patch.search_alt && content.includes(patch.search_alt)) {
-    hasOld = true;
+  // Supports both single string and array of strings (multiple upgrade paths)
+  if (!hasOld && !hasNew && patch.search_alt) {
+    const alts = Array.isArray(patch.search_alt) ? patch.search_alt : [patch.search_alt];
+    for (const alt of alts) {
+      if (content.includes(alt)) { hasOld = true; break; }
+    }
   }
 
   if (hasNew && !hasOld) return PatchState.APPLIED;
@@ -45,10 +49,17 @@ function checkPatchState(patch, content) {
 function applySinglePatch(patch, content, dryRun = false) {
   if (patch.patch_type === 'text_replace') {
     // Support search_alt for upgrade scenarios (old patched text → new patched text)
+    // Supports both single string and array of strings (multiple upgrade paths)
     let searchStr = patch.search;
-    if (!content.includes(searchStr) && patch.search_alt && content.includes(patch.search_alt)) {
-      searchStr = patch.search_alt;
-      log(`${patch.name}: using alternate search (upgrade path)`, 'INFO');
+    if (!content.includes(searchStr) && patch.search_alt) {
+      const alts = Array.isArray(patch.search_alt) ? patch.search_alt : [patch.search_alt];
+      for (const alt of alts) {
+        if (content.includes(alt)) {
+          searchStr = alt;
+          log(`${patch.name}: using alternate search (upgrade path)`, 'INFO');
+          break;
+        }
+      }
     }
     if (!content.includes(searchStr)) {
       log(`Search pattern not found for ${patch.name}`, 'FAIL');
