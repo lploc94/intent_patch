@@ -464,6 +464,30 @@ async function main() {
   if (!args.noInstall && appVersion) {
     savePatchedVersion(appVersion);
     console.log(`\n  ${c.green}✓${c.reset} Patched v${appVersion}`);
+
+    // Cleanup temp data after successful install (~600 MB)
+    const artifacts = [DEFAULT_EXTRACTED, OUTPUT_ASAR, BACKUP_ASAR, BACKUP_UNPACKED];
+    // Don't delete user-provided extracted dir
+    if (args.extractedDir) {
+      artifacts.splice(artifacts.indexOf(DEFAULT_EXTRACTED), 1);
+    }
+    let freed = false;
+    for (const p of artifacts) {
+      if (fs.existsSync(p)) {
+        try {
+          const stat = fs.lstatSync(p);
+          if (stat.isDirectory()) {
+            fs.rmSync(p, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(p);
+          }
+          freed = true;
+        } catch { /* ignore */ }
+      }
+    }
+    if (freed) {
+      log('Cleaned up temp data (extracted, asar, backup)', 'OK');
+    }
   }
 }
 
