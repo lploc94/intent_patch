@@ -158,7 +158,7 @@ function verifyPatches(patches, extractedDir, files) {
 
   if (files.agent_missing_ipc) {
     const amiContent = readFile(fileMap.agent_missing_ipc);
-    if (amiContent.includes('intent-patch: context-rich enhancer via augmentCLI')) {
+    if (amiContent.includes('intent-patch: context-rich enhancer via CLI')) {
       log('AgentMissingIPC: context-rich enhancer injected', 'OK');
       passed++;
     } else {
@@ -194,32 +194,32 @@ function verifyPatches(patches, extractedDir, files) {
       errors.push('Structural: conversation history');
     }
 
-    // Negative checks: ensure spawn code is completely removed
-    if (!amiContent.includes('child_process')) {
-      log('AgentMissingIPC: no child_process (spawn code removed)', 'OK');
+    // Positive check: verify spawn code injected
+    if (amiContent.includes('_spawn(')) {
+      log('AgentMissingIPC: spawn code injected', 'OK');
       passed++;
     } else {
-      log('AgentMissingIPC: child_process still present (spawn code not removed)', 'FAIL');
+      log('AgentMissingIPC: spawn code not found', 'FAIL');
       failed++;
-      errors.push('Structural: child_process removal');
+      errors.push('Structural: spawn code injection');
     }
 
-    if (!amiContent.includes('spawn(_cfg')) {
-      log('AgentMissingIPC: no spawn call present', 'OK');
+    if (amiContent.includes('_proc.stdin.write') && amiContent.includes('_proc.stdin.end')) {
+      log('AgentMissingIPC: stdin piping present', 'OK');
       passed++;
     } else {
-      log('AgentMissingIPC: spawn call still present', 'FAIL');
+      log('AgentMissingIPC: stdin piping missing', 'FAIL');
       failed++;
-      errors.push('Structural: spawn call removal');
+      errors.push('Structural: stdin piping');
     }
 
-    if (!amiContent.includes('_proc.stdin')) {
-      log('AgentMissingIPC: no stdin piping present', 'OK');
+    if (amiContent.includes('CLI enhancer failed, falling back to augmentCLI')) {
+      log('AgentMissingIPC: augmentCLI fallback present', 'OK');
       passed++;
     } else {
-      log('AgentMissingIPC: stdin piping still present', 'FAIL');
+      log('AgentMissingIPC: augmentCLI fallback missing', 'FAIL');
       failed++;
-      errors.push('Structural: stdin piping removal');
+      errors.push('Structural: augmentCLI fallback');
     }
   }
 

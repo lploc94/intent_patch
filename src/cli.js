@@ -456,26 +456,30 @@ async function main() {
   if (!args.dryRun && !args.discoverOnly) {
     const enhancerCfg = path.join(STATE_DIR, 'enhancer.json');
     const defaultCfg = {
+      tool: 'claude',
+      args: ['--print'],
       systemPrompt: 'You are a prompt enhancer. Given the user\'s prompt and the provided workspace context and conversation history, rewrite the prompt to be clearer, more specific, less ambiguous, and leverage the available context. Do not use any tools. Reply with the enhanced prompt wrapped in <augment-enhanced-prompt> tags.',
       maxConversationMessages: 20,
       maxContextChars: 50000,
+      maxBuffer: 5,
       timeout: 60000,
     };
     if (!fs.existsSync(enhancerCfg)) {
       fs.writeFileSync(enhancerCfg, JSON.stringify(defaultCfg, null, 2) + '\n');
       log('Created default enhancer config: ~/.intent-patch/enhancer.json', 'OK');
     } else {
-      // Migrate old bash-based config → augmentCLI-based
+      // Migrate existing config — backfill new keys, respect user opt-out
       try {
         const existing = JSON.parse(fs.readFileSync(enhancerCfg, 'utf8'));
         let migrated = false;
-        if (existing.tool) { delete existing.tool; migrated = true; }
-        if (existing.args) { delete existing.args; migrated = true; }
-        if (existing.maxBuffer) { delete existing.maxBuffer; migrated = true; }
-        if (existing.maxContextChars == null) { existing.maxContextChars = 50000; migrated = true; }
+        // Backfill tool/args only if key is literally absent (not if falsy — user opt-out)
+        if (!('tool' in existing)) { existing.tool = 'claude'; migrated = true; }
+        if (!('args' in existing)) { existing.args = ['--print']; migrated = true; }
+        if (!('maxBuffer' in existing)) { existing.maxBuffer = 5; migrated = true; }
+        if (!('maxContextChars' in existing)) { existing.maxContextChars = 50000; migrated = true; }
         if (migrated) {
           fs.writeFileSync(enhancerCfg, JSON.stringify(existing, null, 2) + '\n');
-          log('Migrated enhancer config: removed bash fields, added maxContextChars', 'OK');
+          log('Migrated enhancer config: backfilled tool/args/maxBuffer/maxContextChars', 'OK');
         }
       } catch {}
     }

@@ -23,6 +23,10 @@ function checkPatchState(patch, content) {
   } else if (patch.search_regex && new RegExp(patch.search_regex, 's').test(content)) {
     hasOld = true;
   }
+  // search_alt: only consider "old" if new is NOT present (upgrade scenario)
+  if (!hasOld && !hasNew && patch.search_alt && content.includes(patch.search_alt)) {
+    hasOld = true;
+  }
 
   if (hasNew && !hasOld) return PatchState.APPLIED;
   if (hasOld && !hasNew) return PatchState.NOT_APPLIED;
@@ -40,11 +44,17 @@ function checkPatchState(patch, content) {
 
 function applySinglePatch(patch, content, dryRun = false) {
   if (patch.patch_type === 'text_replace') {
-    if (!content.includes(patch.search)) {
+    // Support search_alt for upgrade scenarios (old patched text → new patched text)
+    let searchStr = patch.search;
+    if (!content.includes(searchStr) && patch.search_alt && content.includes(patch.search_alt)) {
+      searchStr = patch.search_alt;
+      log(`${patch.name}: using alternate search (upgrade path)`, 'INFO');
+    }
+    if (!content.includes(searchStr)) {
       log(`Search pattern not found for ${patch.name}`, 'FAIL');
       return null;
     }
-    const count = content.split(patch.search).length - 1;
+    const count = content.split(searchStr).length - 1;
     if (count > 1) {
       log(`Multiple matches (${count}) for ${patch.name}`, 'FAIL');
       return null;
@@ -53,7 +63,7 @@ function applySinglePatch(patch, content, dryRun = false) {
       log(`Would apply ${patch.name}`, 'SKIP');
       return content;
     }
-    return content.replace(patch.search, patch.replace);
+    return content.replace(searchStr, patch.replace);
   }
 
   if (patch.patch_type === 'statement_replace') {
