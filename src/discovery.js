@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { log, fatal, readFile, header } = require('./utils');
-const { AGENT_FACTORY_REL, AGENT_INTERACTION_TOOLS_REL, CHUNKS_DIR_REL } = require('./constants');
+const { AGENT_FACTORY_REL, AGENT_INTERACTION_TOOLS_REL, CHUNKS_DIR_REL, MAIN_INDEX_REL } = require('./constants');
 
 function discoverFiles(extractedDir) {
   header('Phase 1: File Discovery');
@@ -11,6 +11,7 @@ function discoverFiles(extractedDir) {
   const files = {
     agent_factory: AGENT_FACTORY_REL,
     agent_interaction_tools: AGENT_INTERACTION_TOOLS_REL,
+    main_index: MAIN_INDEX_REL,
     provider_config: null,
     model_store: null,
     model_picker: null,
@@ -38,6 +39,16 @@ function discoverFiles(extractedDir) {
   } else {
     log('agent-interaction-tools.js not found \u2014 patches 8A-8D will be skipped', 'WARN');
     files.agent_interaction_tools = null;
+  }
+
+  // 1.1c main/index.js (optional — for auto-update patch 9A)
+  const miPath = path.join(extractedDir, MAIN_INDEX_REL);
+  if (fs.existsSync(miPath)) {
+    log(`main/index.js: ${MAIN_INDEX_REL}`, 'OK');
+  } else {
+    log('main/index.js not found \u2014 auto-update patch 9A will be SKIPPED!', 'WARN');
+    log('WARNING: Auto-update will remain active, which may cause disk bloat', 'WARN');
+    files.main_index = null;
   }
 
   // 1.2 Provider Config Chunk

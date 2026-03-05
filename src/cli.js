@@ -413,6 +413,7 @@ async function main() {
     console.log(`  ModelPicker:     ${files.model_picker}`);
     console.log(`  Agent Factory:   ${files.agent_factory}`);
     console.log(`  Agent Interact:  ${files.agent_interaction_tools || '(not found \u2014 patches 8A-8D skipped)'}`);
+    console.log(`  Main Index:      ${files.main_index || '(not found \u2014 patch 9A skipped)'}`);
     console.log('\n  Provider Config Exports:');
     for (const [name, alias] of Object.entries(pcSymbols.provider_exports)) {
       console.log(`    ${name} \u2192 '${alias}'`);
@@ -452,6 +453,12 @@ async function main() {
 
   // Phase 5: Repack & Install
   await repackAndInstall(extractedDir, files, args.noInstall, asarMode);
+
+  // Warn if auto-update patch was skipped (show for both --no-install and full install)
+  if (!files.main_index) {
+    console.log(`\n  ${c.yellow}⚠ Auto-update patch (9A) was NOT applied — main/index.js not found.${c.reset}`);
+    console.log(`  ${c.yellow}  Auto-update may remain active, potentially causing disk bloat.${c.reset}`);
+  }
 
   // Save patched version
   if (!args.noInstall && appVersion) {

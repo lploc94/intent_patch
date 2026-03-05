@@ -159,7 +159,29 @@ function buildPatches(files, pcSymbols, msSymbols, mpSymbols, extractedDir) {
     verify_absent: null,
   });
 
-  // Agent Interaction Tools Patches (8A-8D)
+  // Main Index Patch (9A: disable auto-update)
+  // Placed BEFORE agent_interaction_tools guard so it's always built when main_index exists
+  if (files.main_index) {
+    patches.push({
+      name: 'Patch 9A: disable auto-updater initialization',
+      file_key: 'main_index',
+      patch_type: 'text_replace',
+      search: (
+        "        if (process.env.NODE_ENV !== 'development' && mainWindow) {\n"
+        + "            initializeAutoUpdater(mainWindow);\n"
+        + "        }"
+      ),
+      replace: (
+        "        if (false /* intent-patch: auto-update disabled */) {\n"
+        + "            initializeAutoUpdater(mainWindow);\n"
+        + "        }"
+      ),
+      verify_present: 'intent-patch: auto-update disabled',
+      verify_absent: "process.env.NODE_ENV !== 'development' && mainWindow) {\n            initializeAutoUpdater(mainWindow);",
+    });
+  }
+
+  // Agent Interaction Tools Patches (8A-8D) — guarded by early return
   if (!files.agent_interaction_tools) return patches;
 
   patches.push({

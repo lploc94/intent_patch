@@ -14,6 +14,9 @@ function verifyPatches(patches, extractedDir, files) {
   if (files.agent_interaction_tools) {
     fileMap.agent_interaction_tools = path.join(extractedDir, files.agent_interaction_tools);
   }
+  if (files.main_index) {
+    fileMap.main_index = path.join(extractedDir, files.main_index);
+  }
 
   let passed = 0;
   let failed = 0;
@@ -127,6 +130,26 @@ function verifyPatches(patches, extractedDir, files) {
       log('AgentInteractionTools: legacy ctx.provider still present in createAgent', 'FAIL');
       failed++;
       errors.push('Structural: legacy ctx.provider');
+    }
+  }
+
+  if (files.main_index) {
+    const miContent = readFile(fileMap.main_index);
+    if (miContent.includes('intent-patch: auto-update disabled')) {
+      log('MainIndex: auto-updater initialization disabled', 'OK');
+      passed++;
+    } else {
+      log('MainIndex: auto-updater not disabled', 'FAIL');
+      failed++;
+      errors.push('Structural: auto-update disable');
+    }
+    if (miContent.includes('setupAutoUpdateIPC()')) {
+      log('MainIndex: setupAutoUpdateIPC still active', 'OK');
+      passed++;
+    } else {
+      log('MainIndex: setupAutoUpdateIPC missing', 'FAIL');
+      failed++;
+      errors.push('Structural: setupAutoUpdateIPC');
     }
   }
 

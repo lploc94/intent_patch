@@ -22,6 +22,7 @@ const VERSION_FILE = path.join(STATE_DIR, '.patched-version');
 const AGENT_FACTORY_REL = 'dist/features/agent/services/agent-factory.js';
 const AGENT_INTERACTION_TOOLS_REL = 'dist/features/mcp/main/mcp/agent-interaction-tools.js';
 const CHUNKS_DIR_REL = 'dist/renderer/app/immutable/chunks';
+const MAIN_INDEX_REL = 'dist/main/index.js';
 
 // Patch marker
 const PATCH_MARKER = '"__all__"';
@@ -48,6 +49,7 @@ module.exports = {
   AGENT_FACTORY_REL,
   AGENT_INTERACTION_TOOLS_REL,
   CHUNKS_DIR_REL,
+  MAIN_INDEX_REL,
   PATCH_MARKER,
   PatchState,
 };

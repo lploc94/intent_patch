@@ -201,6 +201,9 @@ function applyPatches(patches, extractedDir, files, dryRun = false) {
   if (files.agent_interaction_tools) {
     fileMap.agent_interaction_tools = path.join(extractedDir, files.agent_interaction_tools);
   }
+  if (files.main_index) {
+    fileMap.main_index = path.join(extractedDir, files.main_index);
+  }
 
   let allOk = true;
 
