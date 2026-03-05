@@ -17,6 +17,9 @@ function verifyPatches(patches, extractedDir, files) {
   if (files.main_index) {
     fileMap.main_index = path.join(extractedDir, files.main_index);
   }
+  if (files.agent_missing_ipc) {
+    fileMap.agent_missing_ipc = path.join(extractedDir, files.agent_missing_ipc);
+  }
 
   let passed = 0;
   let failed = 0;
@@ -150,6 +153,73 @@ function verifyPatches(patches, extractedDir, files) {
       log('MainIndex: setupAutoUpdateIPC missing', 'FAIL');
       failed++;
       errors.push('Structural: setupAutoUpdateIPC');
+    }
+  }
+
+  if (files.agent_missing_ipc) {
+    const amiContent = readFile(fileMap.agent_missing_ipc);
+    if (amiContent.includes('intent-patch: context-rich enhancer via augmentCLI')) {
+      log('AgentMissingIPC: context-rich enhancer injected', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: context-rich enhancer not found', 'FAIL');
+      failed++;
+      errors.push('Structural: context-rich enhancer injection');
+    }
+
+    if (amiContent.includes('getInputWithEnhancePrompt(prompt)')) {
+      log('AgentMissingIPC: uses original enhance prompt template', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: getInputWithEnhancePrompt missing', 'FAIL');
+      failed++;
+      errors.push('Structural: enhance prompt template');
+    }
+
+    if (amiContent.includes('workspaceService.getWorkspace')) {
+      log('AgentMissingIPC: workspace context enrichment', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: workspace context enrichment missing', 'FAIL');
+      failed++;
+      errors.push('Structural: workspace context');
+    }
+
+    if (amiContent.includes('agentPersistence.listAgents')) {
+      log('AgentMissingIPC: conversation history access', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: conversation history access missing', 'FAIL');
+      failed++;
+      errors.push('Structural: conversation history');
+    }
+
+    // Negative checks: ensure spawn code is completely removed
+    if (!amiContent.includes('child_process')) {
+      log('AgentMissingIPC: no child_process (spawn code removed)', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: child_process still present (spawn code not removed)', 'FAIL');
+      failed++;
+      errors.push('Structural: child_process removal');
+    }
+
+    if (!amiContent.includes('spawn(_cfg')) {
+      log('AgentMissingIPC: no spawn call present', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: spawn call still present', 'FAIL');
+      failed++;
+      errors.push('Structural: spawn call removal');
+    }
+
+    if (!amiContent.includes('_proc.stdin')) {
+      log('AgentMissingIPC: no stdin piping present', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: stdin piping still present', 'FAIL');
+      failed++;
+      errors.push('Structural: stdin piping removal');
     }
   }
 

@@ -414,6 +414,7 @@ async function main() {
     console.log(`  Agent Factory:   ${files.agent_factory}`);
     console.log(`  Agent Interact:  ${files.agent_interaction_tools || '(not found \u2014 patches 8A-8D skipped)'}`);
     console.log(`  Main Index:      ${files.main_index || '(not found \u2014 patch 9A skipped)'}`);
+    console.log(`  Agent Missing:   ${files.agent_missing_ipc}`);
     console.log('\n  Provider Config Exports:');
     for (const [name, alias] of Object.entries(pcSymbols.provider_exports)) {
       console.log(`    ${name} \u2192 '${alias}'`);
@@ -449,6 +450,35 @@ async function main() {
   // Phase 4: Verification
   if (!verifyPatches(patches, extractedDir, files)) {
     fatal('Verification failed. Patches may be incomplete.');
+  }
+
+  // Create or migrate enhancer config
+  if (!args.dryRun && !args.discoverOnly) {
+    const enhancerCfg = path.join(STATE_DIR, 'enhancer.json');
+    const defaultCfg = {
+      systemPrompt: 'You are a prompt enhancer. Given the user\'s prompt and the provided workspace context and conversation history, rewrite the prompt to be clearer, more specific, less ambiguous, and leverage the available context. Do not use any tools. Reply with the enhanced prompt wrapped in <augment-enhanced-prompt> tags.',
+      maxConversationMessages: 20,
+      maxContextChars: 50000,
+      timeout: 60000,
+    };
+    if (!fs.existsSync(enhancerCfg)) {
+      fs.writeFileSync(enhancerCfg, JSON.stringify(defaultCfg, null, 2) + '\n');
+      log('Created default enhancer config: ~/.intent-patch/enhancer.json', 'OK');
+    } else {
+      // Migrate old bash-based config → augmentCLI-based
+      try {
+        const existing = JSON.parse(fs.readFileSync(enhancerCfg, 'utf8'));
+        let migrated = false;
+        if (existing.tool) { delete existing.tool; migrated = true; }
+        if (existing.args) { delete existing.args; migrated = true; }
+        if (existing.maxBuffer) { delete existing.maxBuffer; migrated = true; }
+        if (existing.maxContextChars == null) { existing.maxContextChars = 50000; migrated = true; }
+        if (migrated) {
+          fs.writeFileSync(enhancerCfg, JSON.stringify(existing, null, 2) + '\n');
+          log('Migrated enhancer config: removed bash fields, added maxContextChars', 'OK');
+        }
+      } catch {}
+    }
   }
 
   // Phase 5: Repack & Install

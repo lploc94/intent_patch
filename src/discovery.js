@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { log, fatal, readFile, header } = require('./utils');
-const { AGENT_FACTORY_REL, AGENT_INTERACTION_TOOLS_REL, CHUNKS_DIR_REL, MAIN_INDEX_REL } = require('./constants');
+const { AGENT_FACTORY_REL, AGENT_INTERACTION_TOOLS_REL, CHUNKS_DIR_REL, MAIN_INDEX_REL, AGENT_MISSING_IPC_REL } = require('./constants');
 
 function discoverFiles(extractedDir) {
   header('Phase 1: File Discovery');
@@ -12,6 +12,7 @@ function discoverFiles(extractedDir) {
     agent_factory: AGENT_FACTORY_REL,
     agent_interaction_tools: AGENT_INTERACTION_TOOLS_REL,
     main_index: MAIN_INDEX_REL,
+    agent_missing_ipc: AGENT_MISSING_IPC_REL,
     provider_config: null,
     model_store: null,
     model_picker: null,
@@ -49,6 +50,14 @@ function discoverFiles(extractedDir) {
     log('main/index.js not found \u2014 auto-update patch 9A will be SKIPPED!', 'WARN');
     log('WARNING: Auto-update will remain active, which may cause disk bloat', 'WARN');
     files.main_index = null;
+  }
+
+  // 1.1d agent-missing.ipc.js (required — for enhancer patches 10A-10B)
+  const amiPath = path.join(extractedDir, AGENT_MISSING_IPC_REL);
+  if (fs.existsSync(amiPath)) {
+    log(`agent-missing.ipc.js: ${AGENT_MISSING_IPC_REL}`, 'OK');
+  } else {
+    fatal(`agent-missing.ipc.js not found at ${amiPath}`);
   }
 
   // 1.2 Provider Config Chunk

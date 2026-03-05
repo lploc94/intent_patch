@@ -23,6 +23,7 @@ const AGENT_FACTORY_REL = 'dist/features/agent/services/agent-factory.js';
 const AGENT_INTERACTION_TOOLS_REL = 'dist/features/mcp/main/mcp/agent-interaction-tools.js';
 const CHUNKS_DIR_REL = 'dist/renderer/app/immutable/chunks';
 const MAIN_INDEX_REL = 'dist/main/index.js';
+const AGENT_MISSING_IPC_REL = 'dist/features/agent/main/agent-missing.ipc.js';
 
 // Patch marker
 const PATCH_MARKER = '"__all__"';
@@ -50,6 +51,7 @@ module.exports = {
   AGENT_INTERACTION_TOOLS_REL,
   CHUNKS_DIR_REL,
   MAIN_INDEX_REL,
+  AGENT_MISSING_IPC_REL,
   PATCH_MARKER,
   PatchState,
 };

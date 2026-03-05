@@ -181,6 +181,53 @@ function buildPatches(files, pcSymbols, msSymbols, mpSymbols, extractedDir) {
     });
   }
 
+  // Prompt Enhancer Patches (10A-10B: context-rich enhancer via augmentCLI)
+  if (files.agent_missing_ipc) {
+    patches.push({
+      name: 'Patch 10A: import services for enhancer context',
+      file_key: 'agent_missing_ipc',
+      patch_type: 'text_replace',
+      search: "import { getInputWithEnhancePrompt, extractEnhancedPrompt, } from '../../../lib/utils/prompt-enhancement.js';",
+      replace: (
+        "import { getInputWithEnhancePrompt, extractEnhancedPrompt } from '../../../lib/utils/prompt-enhancement.js';\n"
+        + "import { workspaceService } from '../../workspace/main/workspace.service.js';\n"
+        + "import { agentPersistence } from '../../agent/main/agent-persistence.js';\n"
+        + "import _fs from 'node:fs';\n"
+        + "import _path from 'node:path';\n"
+        + "import _os from 'node:os';"
+      ),
+      verify_present: "import { workspaceService } from '../../workspace/main/workspace.service.js'",
+      verify_absent: "extractEnhancedPrompt, } from '../../../lib/utils/prompt-enhancement.js'",
+    });
+
+    patches.push({
+      name: 'Patch 10B: context-rich enhancer via augmentCLI',
+      file_key: 'agent_missing_ipc',
+      patch_type: 'text_replace',
+      search: (
+        "const enhancementPrompt = getInputWithEnhancePrompt(prompt);\n"
+        + "            // Use auggie CLI to enhance the prompt\n"
+        + "            // Use a 30 second timeout for prompt enhancement (simple request)\n"
+        + "            // Skip MCP servers for faster response - prompt enhancement doesn't need tools\n"
+        + "            // Model is passed from the renderer (from backgroundAgentSettingsStore.getModelForType('fast'))\n"
+        + "            const response = await augmentCLI.streamChat(enhancementPrompt, {\n"
+        + "                model: modelId || MODEL_DEFAULTS.BACKGROUND_REQUEST_MODEL,\n"
+        + "                workspaceId,\n"
+        + "                agentId: 'enhance-prompt',\n"
+        + "                systemPrompt: 'You are a helpful assistant. Respond directly and concisely. Do not use any tools.',\n"
+        + "                skipMcp: true, // Skip MCP server initialization for faster response\n"
+        + "            }, () => { }, // No streaming chunks needed for this use case\n"
+        + "            undefined, // No abort signal\n"
+        + "            30000);\n"
+        + "            // Extract the enhanced prompt from the response\n"
+        + "            const enhancedPrompt = extractEnhancedPrompt(response.content);"
+      ),
+      replace: _buildPatch10BReplace(),
+      verify_present: 'intent-patch: context-rich enhancer via augmentCLI',
+      verify_absent: 'Use auggie CLI to enhance the prompt',
+    });
+  }
+
   // Agent Interaction Tools Patches (8A-8D) — guarded by early return
   if (!files.agent_interaction_tools) return patches;
 
@@ -561,6 +608,82 @@ function _build6cReplace() {
     + "                    }\n"
     + "                }\n"
     + "            }"
+  );
+}
+
+function _buildPatch10BReplace() {
+  return (
+    "// intent-patch: context-rich enhancer via augmentCLI\n"
+    + "            const _cfgPath = _path.join(_os.homedir(), '.intent-patch', 'enhancer.json');\n"
+    + "            let _cfg = {};\n"
+    + "            try { _cfg = JSON.parse(_fs.readFileSync(_cfgPath, 'utf8')); } catch {}\n"
+    + "            // 1. Gather workspace context\n"
+    + "            let _ctxParts = [];\n"
+    + "            if (workspaceId) {\n"
+    + "                try {\n"
+    + "                    const _ws = await workspaceService.getWorkspace(workspaceId);\n"
+    + "                    if (_ws?.ok && _ws.data) {\n"
+    + "                        const _wsPath = _ws.data.worktreePath || _ws.data.repositoryPath || '';\n"
+    + "                        const _scope = _ws.data.scope || '';\n"
+    + "                        if (_wsPath) _ctxParts.push('Workspace: ' + _wsPath);\n"
+    + "                        if (_scope) _ctxParts.push('Scope: ' + _scope);\n"
+    + "                    }\n"
+    + "                } catch {}\n"
+    + "            }\n"
+    + "            // 2. Gather conversation history\n"
+    + "            if (workspaceId) {\n"
+    + "                try {\n"
+    + "                    const _agentIds = await agentPersistence.listAgents(workspaceId);\n"
+    + "                    if (_agentIds.length > 0) {\n"
+    + "                        const _maxLoad = 5;\n"
+    + "                        const _loads = await Promise.all(\n"
+    + "                            _agentIds.slice(0, _maxLoad).map(id =>\n"
+    + "                                agentPersistence.loadAgent(id, workspaceId).catch(() => null)\n"
+    + "                            )\n"
+    + "                        );\n"
+    + "                        const _agents = _loads\n"
+    + "                            .filter(r => r?.success && r.data?.messages?.length > 0)\n"
+    + "                            .map(r => r.data);\n"
+    + "                        _agents.sort((a, b) => {\n"
+    + "                            const ta = new Date(a.updatedAt || a.lastActivity || 0).getTime();\n"
+    + "                            const tb = new Date(b.updatedAt || b.lastActivity || 0).getTime();\n"
+    + "                            return tb - ta;\n"
+    + "                        });\n"
+    + "                        if (_agents[0]?.messages) {\n"
+    + "                            const _maxMsgs = _cfg.maxConversationMessages ?? 20;\n"
+    + "                            const _msgs = _agents[0].messages.slice(-_maxMsgs);\n"
+    + "                            const _history = _msgs.map(m => {\n"
+    + "                                const _role = m.role || 'unknown';\n"
+    + "                                const _text = typeof m.content === 'string'\n"
+    + "                                    ? m.content : JSON.stringify(m.content);\n"
+    + "                                return _role + ': ' + _text.slice(0, 2000);\n"
+    + "                            }).join('\\n');\n"
+    + "                            if (_history) _ctxParts.push('Recent conversation:\\n' + _history);\n"
+    + "                        }\n"
+    + "                    }\n"
+    + "                } catch {}\n"
+    + "            }\n"
+    + "            // 3. Build enhanced prompt with context\n"
+    + "            const _basePrompt = getInputWithEnhancePrompt(prompt);\n"
+    + "            const _MAX_CTX_CHARS = (_cfg.maxContextChars ?? 50000);\n"
+    + "            let _ctxStr = _ctxParts.join('\\n\\n');\n"
+    + "            if (_MAX_CTX_CHARS <= 0) _ctxStr = '';\n"
+    + "            else if (_ctxStr.length > _MAX_CTX_CHARS) _ctxStr = _ctxStr.slice(0, _MAX_CTX_CHARS) + '\\n... (truncated)';\n"
+    + "            const _fullPrompt = _ctxStr.length > 0\n"
+    + "                ? 'Context for this enhancement:\\n' + _ctxStr + '\\n\\n---\\n\\n' + _basePrompt\n"
+    + "                : _basePrompt;\n"
+    + "            // 4. Call augmentCLI with rich context\n"
+    + "            const _sysPrompt = _cfg.systemPrompt\n"
+    + "                || 'You are a helpful assistant that enhances prompts. Use the provided context to make the prompt more specific and actionable. Do not use any tools.';\n"
+    + "            const _timeout = _cfg.timeout ?? 60000;\n"
+    + "            const response = await augmentCLI.streamChat(_fullPrompt, {\n"
+    + "                model: modelId || MODEL_DEFAULTS.BACKGROUND_REQUEST_MODEL,\n"
+    + "                workspaceId,\n"
+    + "                agentId: 'enhance-prompt',\n"
+    + "                systemPrompt: _sysPrompt,\n"
+    + "                skipMcp: true,\n"
+    + "            }, () => { }, undefined, _timeout);\n"
+    + "            const enhancedPrompt = extractEnhancedPrompt(response.content);"
   );
 }
 

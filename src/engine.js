@@ -204,6 +204,9 @@ function applyPatches(patches, extractedDir, files, dryRun = false) {
   if (files.main_index) {
     fileMap.main_index = path.join(extractedDir, files.main_index);
   }
+  if (files.agent_missing_ipc) {
+    fileMap.agent_missing_ipc = path.join(extractedDir, files.agent_missing_ipc);
+  }
 
   let allOk = true;
 
