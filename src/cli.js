@@ -467,23 +467,6 @@ async function main() {
       timeout: 60000,
     };
 
-    // Migration helper: detect old default prompts that should be overwritten
-    const OLD_DEFAULTS = [
-      // old cli.js default (exact, trimmed)
-      'You are a prompt enhancer. Given the user\'s prompt and the provided workspace context and conversation history, rewrite the prompt to be clearer, more specific, less ambiguous, and leverage the available context. Do not use any tools. Reply with the enhanced prompt wrapped in <augment-enhanced-prompt> tags.',
-      // old patches.js fallback (exact, trimmed)
-      'You are a helpful assistant that enhances prompts. Do not use any tools.',
-      // previous version with "same language" rule (exact, trimmed)
-      'You are a prompt enhancer. Your job is to take the user\'s prompt and rewrite it to be clearer, more specific, and more actionable.\n\nRules:\n- ALWAYS respond in the same language as the user\'s prompt. If the prompt is in Vietnamese, respond in Vietnamese. If in English, respond in English. If the language is ambiguous or the prompt is code-only, default to English.\n- Use the provided context (workspace path, conversation history) to make the prompt more grounded and specific.\n- Expand vague references into concrete details when context makes it possible.\n- Preserve the user\'s intent — do not change what they\'re asking for, only how they ask it.\n- Keep the enhanced prompt concise. Add detail where it helps, but don\'t pad with unnecessary filler.\n- At the end of the enhanced prompt, add a "## Suggested references" section listing specific files, functions, or concepts the agent should examine. ONLY include references that are explicitly mentioned in the provided context or conversation history — do not guess or fabricate paths. If no relevant references can be identified from the context, omit this section entirely. Examples:\n  - "Read `src/auth/login.ts` — contains the current login flow"\n  - "Check function `validateToken()` in `src/utils/jwt.ts`"\n  - "Search for usages of `UserContext` across the codebase"\n  - "Look up OAuth2 PKCE flow documentation"\n- Do not use any tools.\n- Reply with the enhanced prompt wrapped in <augment-enhanced-prompt> tags.',
-    ];
-
-    function _isOldDefault(s) {
-      if (!s || typeof s !== 'string') return true;  // null/undefined/empty → treat as old
-      const t = s.trim();
-      if (!t) return true;                            // whitespace-only → old
-      return OLD_DEFAULTS.includes(t);                // full exact match only
-    }
-
     if (!fs.existsSync(enhancerCfg)) {
       fs.writeFileSync(enhancerCfg, JSON.stringify(defaultCfg, null, 2) + '\n');
       log('Created default enhancer config: ~/.intent-patch/enhancer.json', 'OK');
@@ -517,8 +500,8 @@ async function main() {
         // Backfill new keys if absent
         if (!('maxBuffer' in existing)) { existing.maxBuffer = 5; migrated = true; }
         if (!('maxContextChars' in existing)) { existing.maxContextChars = 50000; migrated = true; }
-        // Migrate systemPrompt: overwrite old defaults, preserve user customizations
-        if (_isOldDefault(existing.systemPrompt)) {
+        // Always overwrite systemPrompt with latest default
+        if (existing.systemPrompt !== defaultCfg.systemPrompt) {
           existing.systemPrompt = defaultCfg.systemPrompt;
           migrated = true;
         }
