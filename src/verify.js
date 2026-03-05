@@ -213,13 +213,22 @@ function verifyPatches(patches, extractedDir, files) {
       errors.push('Structural: stdin piping');
     }
 
-    if (amiContent.includes('CLI enhancer failed, falling back to augmentCLI')) {
-      log('AgentMissingIPC: augmentCLI fallback present', 'OK');
+    if (amiContent.includes('Prompt enhancement failed: CLI tool')) {
+      log('AgentMissingIPC: CLI catch-branch error handling present', 'OK');
       passed++;
     } else {
-      log('AgentMissingIPC: augmentCLI fallback missing', 'FAIL');
+      log('AgentMissingIPC: CLI catch-branch error handling missing', 'FAIL');
       failed++;
-      errors.push('Structural: augmentCLI fallback');
+      errors.push('Structural: CLI catch-branch error handling');
+    }
+
+    if (amiContent.includes('No CLI tool configured for provider')) {
+      log('AgentMissingIPC: CLI else-branch error handling present', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: CLI else-branch error handling missing', 'FAIL');
+      failed++;
+      errors.push('Structural: CLI else-branch error handling');
     }
 
     if (amiContent.includes('_cfg.providerTools') && amiContent.includes('_pt[_providerId]')) {

@@ -181,7 +181,7 @@ function buildPatches(files, pcSymbols, msSymbols, mpSymbols, extractedDir) {
     });
   }
 
-  // Prompt Enhancer Patches (10A-10B: context-rich enhancer via augmentCLI)
+  // Prompt Enhancer Patches (10A-10B: context-rich enhancer via CLI (providerTools))
   if (files.agent_missing_ipc) {
     patches.push({
       name: 'Patch 10A: import services for enhancer context',
@@ -728,29 +728,13 @@ function _buildPatch10BReplace() {
     + "                    });\n"
     + "                    enhancedPrompt = extractEnhancedPrompt(_raw);\n"
     + "                } catch (_spawnErr) {\n"
-    + "                    const _isNotFound = _spawnErr.code === 'ENOENT';\n"
-    + "                    logger.warn(_isNotFound\n"
-    + "                        ? 'CLI tool not found, falling back to augmentCLI. Remove provider from providerTools in enhancer.json to silence.'\n"
-    + "                        : 'CLI enhancer failed, falling back to augmentCLI',\n"
-    + "                        { error: _spawnErr.message, tool: _tool, provider: _providerId });\n"
-    + "                    const response = await augmentCLI.streamChat(_fullPrompt, {\n"
-    + "                        model: modelId || MODEL_DEFAULTS.BACKGROUND_REQUEST_MODEL,\n"
-    + "                        workspaceId,\n"
-    + "                        agentId: 'enhance-prompt',\n"
-    + "                        systemPrompt: _sysPrompt,\n"
-    + "                        skipMcp: true,\n"
-    + "                    }, () => {}, undefined, _TIMEOUT);\n"
-    + "                    enhancedPrompt = extractEnhancedPrompt(response.content);\n"
+    + "                    logger.error('CLI enhancer failed', { error: _spawnErr.message, tool: _tool, provider: _providerId });\n"
+    + "                    throw new Error('Prompt enhancement failed: CLI tool \"' + _tool + '\" error: ' + _spawnErr.message);\n"
     + "                }\n"
     + "            } else {\n"
-    + "                const response = await augmentCLI.streamChat(_fullPrompt, {\n"
-    + "                    model: modelId || MODEL_DEFAULTS.BACKGROUND_REQUEST_MODEL,\n"
-    + "                    workspaceId,\n"
-    + "                    agentId: 'enhance-prompt',\n"
-    + "                    systemPrompt: _sysPrompt,\n"
-    + "                    skipMcp: true,\n"
-    + "                }, () => {}, undefined, _TIMEOUT);\n"
-    + "                enhancedPrompt = extractEnhancedPrompt(response.content);\n"
+    + "                const _msg = 'No CLI tool configured for provider \"' + (_providerId || 'unknown') + '\". Add to providerTools in ~/.intent-patch/enhancer.json';\n"
+    + "                logger.error(_msg);\n"
+    + "                throw new Error(_msg);\n"
     + "            }"
   );
 }
