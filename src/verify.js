@@ -158,13 +158,13 @@ function verifyPatches(patches, extractedDir, files) {
 
   if (files.agent_missing_ipc) {
     const amiContent = readFile(fileMap.agent_missing_ipc);
-    if (amiContent.includes('intent-patch: context-rich enhancer via CLI')) {
-      log('AgentMissingIPC: context-rich enhancer injected', 'OK');
+    if (amiContent.includes('intent-patch: context-rich enhancer via CLI (providerTools)')) {
+      log('AgentMissingIPC: context-rich enhancer injected (providerTools)', 'OK');
       passed++;
     } else {
-      log('AgentMissingIPC: context-rich enhancer not found', 'FAIL');
+      log('AgentMissingIPC: context-rich enhancer (providerTools) not found', 'FAIL');
       failed++;
-      errors.push('Structural: context-rich enhancer injection');
+      errors.push('Structural: context-rich enhancer injection (providerTools)');
     }
 
     if (amiContent.includes('getInputWithEnhancePrompt(prompt)')) {
@@ -220,6 +220,15 @@ function verifyPatches(patches, extractedDir, files) {
       log('AgentMissingIPC: augmentCLI fallback missing', 'FAIL');
       failed++;
       errors.push('Structural: augmentCLI fallback');
+    }
+
+    if (amiContent.includes('_cfg.providerTools') && amiContent.includes('_pt[_providerId]')) {
+      log('AgentMissingIPC: providerTools lookup present', 'OK');
+      passed++;
+    } else {
+      log('AgentMissingIPC: providerTools lookup missing', 'FAIL');
+      failed++;
+      errors.push('Structural: providerTools lookup');
     }
   }
 

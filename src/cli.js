@@ -456,8 +456,10 @@ async function main() {
   if (!args.dryRun && !args.discoverOnly) {
     const enhancerCfg = path.join(STATE_DIR, 'enhancer.json');
     const defaultCfg = {
-      tool: 'claude',
-      args: ['--print'],
+      providerTools: {
+        'claude-code': { tool: 'claude', args: ['--print'] },
+        'codex': { tool: 'codex', args: [] },
+      },
       systemPrompt: 'You are a prompt enhancer. Given the user\'s prompt and the provided workspace context and conversation history, rewrite the prompt to be clearer, more specific, less ambiguous, and leverage the available context. Do not use any tools. Reply with the enhanced prompt wrapped in <augment-enhanced-prompt> tags.',
       maxConversationMessages: 20,
       maxContextChars: 50000,
@@ -468,18 +470,38 @@ async function main() {
       fs.writeFileSync(enhancerCfg, JSON.stringify(defaultCfg, null, 2) + '\n');
       log('Created default enhancer config: ~/.intent-patch/enhancer.json', 'OK');
     } else {
-      // Migrate existing config — backfill new keys, respect user opt-out
+      // Migrate existing config — convert old tool/args to providerTools
       try {
         const existing = JSON.parse(fs.readFileSync(enhancerCfg, 'utf8'));
         let migrated = false;
-        // Backfill tool/args only if key is literally absent (not if falsy — user opt-out)
-        if (!('tool' in existing)) { existing.tool = 'claude'; migrated = true; }
-        if (!('args' in existing)) { existing.args = ['--print']; migrated = true; }
+        // Migrate old tool/args → providerTools
+        if (!('providerTools' in existing)) {
+          if ('tool' in existing) {
+            if (existing.tool) {
+              // Truthy tool → map to all built-in providers (preserve global behavior)
+              existing.providerTools = {
+                'claude-code': { tool: existing.tool, args: existing.args || ['--print'] },
+                'codex':       { tool: existing.tool, args: existing.args || ['--print'] },
+              };
+            } else {
+              // Falsy tool (empty string, null, false) → global opt-out
+              existing.providerTools = {};
+            }
+          } else {
+            // tool key absent → use defaults
+            existing.providerTools = defaultCfg.providerTools;
+          }
+          migrated = true;
+        }
+        // Remove old keys
+        if ('tool' in existing) { delete existing.tool; migrated = true; }
+        if ('args' in existing) { delete existing.args; migrated = true; }
+        // Backfill new keys if absent
         if (!('maxBuffer' in existing)) { existing.maxBuffer = 5; migrated = true; }
         if (!('maxContextChars' in existing)) { existing.maxContextChars = 50000; migrated = true; }
         if (migrated) {
           fs.writeFileSync(enhancerCfg, JSON.stringify(existing, null, 2) + '\n');
-          log('Migrated enhancer config: backfilled tool/args/maxBuffer/maxContextChars', 'OK');
+          log('Migrated enhancer config: providerTools + backfilled missing keys', 'OK');
         }
       } catch {}
     }
