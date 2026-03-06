@@ -231,9 +231,9 @@ function buildPatches(files, pcSymbols, msSymbols, mpSymbols, extractedDir) {
         + "            // Extract the enhanced prompt from the response\n"
         + "            const enhancedPrompt = extractEnhancedPrompt(response.content);"
       ),
-      search_alt: [_buildPatch10BV2Replace(), _buildPatch10BV3Replace(), _buildPatch10BV3bReplace()],
+      search_alt: [_buildPatch10BV2Replace(), _buildPatch10BV3Replace(), _buildPatch10BV3bReplace(), _buildPatch10BV4OldReplace()],
       replace: _buildPatch10BReplace(),
-      verify_present: 'Prompt enhancement failed: CLI tool',
+      verify_present: 'if (!_entry) { for (const _k of Object.keys(_pt))',
       verify_absent: 'Use auggie CLI to enhance the prompt',
     });
   }
@@ -688,7 +688,8 @@ function _buildPatch10BReplace() {
     + "            const _TIMEOUT = _cfg.timeout ?? 60000;\n"
     + "            const _providerId = modelId && modelId.includes(':') ? modelId.split(':')[0] : '';\n"
     + "            const _pt = (_cfg.providerTools != null && typeof _cfg.providerTools === 'object') ? _cfg.providerTools : {};\n"
-    + "            const _entry = _providerId && typeof _pt[_providerId] === 'object' ? _pt[_providerId] : null;\n"
+    + "            let _entry = _providerId && typeof _pt[_providerId] === 'object' ? _pt[_providerId] : null;\n"
+    + "            if (!_entry) { for (const _k of Object.keys(_pt)) { if (typeof _pt[_k] === 'object' && _pt[_k]?.tool) { _entry = _pt[_k]; break; } } }\n"
     + "            const _tool = _entry?.tool;\n"
     + "            let enhancedPrompt;\n"
     + "            if (_tool) {\n"
@@ -1013,6 +1014,16 @@ function _buildPatch10BV3bReplace() {
   return _buildPatch10BV3Replace().replace(
     "'You are a helpful assistant that enhances prompts. Do not use any tools.'",
     _buildPatch10BReplace().match(/\|\| '(You are a prompt enhancer[^']+)'/)[0].slice(3)
+  );
+}
+
+// Patch 10B v4-old replace text (throw-only, no fallback to first providerTools entry)
+// For users who ran the patcher with commit 4cc5e9d..9bfb101 (before default-provider fallback)
+function _buildPatch10BV4OldReplace() {
+  return _buildPatch10BReplace().replace(
+    "            let _entry = _providerId && typeof _pt[_providerId] === 'object' ? _pt[_providerId] : null;\n"
+    + "            if (!_entry) { for (const _k of Object.keys(_pt)) { if (typeof _pt[_k] === 'object' && _pt[_k]?.tool) { _entry = _pt[_k]; break; } } }\n",
+    "            const _entry = _providerId && typeof _pt[_providerId] === 'object' ? _pt[_providerId] : null;\n"
   );
 }
 
